@@ -8,6 +8,7 @@
  */
 
 import { DebtFinding } from '../models/finding';
+import { ScanResult } from '../models/scan';
 
 export interface ExplanationResponse {
   summary: string;
@@ -187,5 +188,97 @@ Respond with a strictly formatted JSON object with these keys:
       remediationAdvice,
       provider: 'deterministic-offline'
     };
+  }
+
+  /**
+   * Conversational LLM assistant interface for querying configuration debt
+   */
+  async chatWithAssistant(
+    userPrompt: string,
+    scanResult: ScanResult | null,
+    apiKey?: string
+  ): Promise<string> {
+    const key = (apiKey || '').trim();
+    if (key.length > 0 && scanResult) {
+      try {
+        const topFindingsSummary = scanResult.findings.slice(0, 5).map(f =>
+          `- ${f.title} (${f.severity.toUpperCase()}, risk ${f.riskScore}): ${f.suggestedAction} in ${f.configurationItem.filePath}:${f.configurationItem.line}`
+        ).join('\n');
+
+        const prompt = `You are an AI Software Configuration Management (SCM) expert for the Configuration Debt Tracker extension.
+Current Repository State:
+- Workspace: ${scanResult.workspaceName}
+- Health Score: ${scanResult.healthScore.score}/100 (${scanResult.healthScore.grade})
+- Total Items: ${scanResult.inventory.totalItems} (${scanResult.inventory.usedItems} used, ${scanResult.inventory.unusedItems} unused)
+- Critical Issues: ${scanResult.inventory.bySeverity.critical}
+- High Issues: ${scanResult.inventory.bySeverity.high}
+- Top Findings:\n${topFindingsSummary}
+
+User question: "${userPrompt}"
+
+Give a concise, highly professional developer response (under 150 words) with actionable SCM guidance. Never reveal raw secrets.`;
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.3 }
+          })
+        });
+        if (response.ok) {
+          const data = (await response.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+          const answer = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (answer) return answer.trim();
+        }
+      } catch {
+        // Fall back to offline assistant
+      }
+    }
+
+    return this.generateOfflineAssistantResponse(userPrompt, scanResult);
+  }
+
+  private generateOfflineAssistantResponse(query: string, scanResult: ScanResult | null): string {
+    if (!scanResult) {
+      return "No workspace scan results found. Click 'Scan Workspace' to identify configuration items and analyze configuration debt.";
+    }
+
+    const q = query.toLowerCase();
+    const inv = scanResult.inventory;
+    const topFindings = scanResult.findings;
+
+    if (q.includes('critical') || q.includes('risk') || q.includes('top')) {
+      const crits = topFindings.filter(f => f.severity === 'critical');
+      if (crits.length === 0) {
+        return `Great news! There are 0 critical configuration findings in ${scanResult.workspaceName}. Focus on resolving the ${inv.bySeverity.high} high-severity findings next.`;
+      }
+      return `Identified ${crits.length} Critical Issue(s):\n` +
+        crits.map((f, i) => `${i + 1}. ${f.title} (${f.configurationItem.filePath}:${f.configurationItem.line}) -> ${f.suggestedAction}`).join('\n');
+    }
+
+    if (q.includes('health') || q.includes('score')) {
+      return `Configuration Health is currently ${scanResult.healthScore.score}/100 (${scanResult.healthScore.grade}). Deductions were applied for ${inv.bySeverity.critical} critical item(s) (-${Math.min(45, inv.bySeverity.critical * 10)} pts) and ${inv.bySeverity.high} high-risk item(s). Cleaning up dead configurations and consolidating duplicates will restore health to >85.`;
+    }
+
+    if (q.includes('duplicate') || q.includes('drift')) {
+      const dups = topFindings.filter(f => f.category === 'duplicated_configuration');
+      if (dups.length === 0) return "No duplicated configurations detected across your configuration files.";
+      return `Found ${dups.length} duplicated configuration setting(s). Ensure you consolidate these into a single authoritative file (e.g. '.env' or root config) and inject values via environment variables to avoid runtime desynchronization.`;
+    }
+
+    if (q.includes('secret') || q.includes('password') || q.includes('token') || q.includes('key')) {
+      const secrets = topFindings.filter(f => f.category === 'hardcoded_secret');
+      if (secrets.length === 0) return "No plaintext secrets detected in tracked configuration files.";
+      return `Found ${secrets.length} plaintext secret(s). Recommended SCM procedure: 1. Rotate the compromised tokens in provider dashboards. 2. Remove values from version control. 3. Inject them at runtime using an encrypted secrets vault or local uncommitted .env.`;
+    }
+
+    // Default overview response
+    return `Configuration Debt Summary for ${scanResult.workspaceName}:
+• Health Score: ${scanResult.healthScore.score}/100 (${scanResult.healthScore.grade})
+• Total Tracked: ${inv.totalItems} items (${inv.usedItems} active, ${inv.unusedItems} unused dead code)
+• Priority Cleanups: ${inv.bySeverity.critical} Critical, ${inv.bySeverity.high} High, ${inv.bySeverity.medium} Medium
+Remediation Recommendation: Address the top #${topFindings[0]?.configurationItem.key || '1'} finding in ${topFindings[0]?.configurationItem.filePath || 'your configuration'} first.`;
   }
 }

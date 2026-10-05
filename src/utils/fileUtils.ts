@@ -27,7 +27,8 @@ export const DEFAULT_EXCLUDE_DIR_NAMES = new Set([
   '.next',
   '.nuxt',
   'bin',
-  'obj'
+  'obj',
+  '.config-debt'
 ]);
 
 export interface ScannedFileInfo {
