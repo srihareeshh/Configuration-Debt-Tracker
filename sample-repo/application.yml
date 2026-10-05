@@ -1,0 +1,10 @@
+# Spring Boot & Microservice configuration
+database:
+  url: postgres://app_user:secret_pass@db.internal:5432/app
+
+api:
+  # Duplicated with .env but configured to 10000ms instead of 5000ms (Configuration Drift!)
+  timeout: 10000
+
+cache:
+  ttl: 3600

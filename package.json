@@ -1,0 +1,151 @@
+{
+  "name": "configuration-debt-tracker",
+  "displayName": "Configuration Debt Tracker",
+  "description": "Intelligent Configuration Debt Analysis and Remediation System for Software Configuration Management",
+  "version": "1.0.0",
+  "publisher": "scm-engineering",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "configuration",
+    "technical debt",
+    "scm",
+    "static analysis",
+    "audit",
+    "cleanup"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "config-debt-sidebar",
+          "title": "Configuration Debt",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "config-debt-sidebar": [
+        {
+          "type": "webview",
+          "id": "configDebt.sidebarView",
+          "name": "Configuration Debt Tracker"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "configDebt.scanWorkspace",
+        "title": "Configuration Debt: Scan Workspace",
+        "category": "Configuration Debt",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "configDebt.openDashboard",
+        "title": "Configuration Debt: Open Main Dashboard",
+        "category": "Configuration Debt",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "configDebt.showBacklog",
+        "title": "Configuration Debt: Show Cleanup Backlog",
+        "category": "Configuration Debt",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "configDebt.refreshAnalysis",
+        "title": "Configuration Debt: Refresh Analysis",
+        "category": "Configuration Debt",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "configDebt.clearHistory",
+        "title": "Configuration Debt: Clear Scan History",
+        "category": "Configuration Debt",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "configDebt.explainFinding",
+        "title": "Configuration Debt: Explain Finding",
+        "category": "Configuration Debt",
+        "icon": "$(comment-discussion)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "configDebt.scanWorkspace",
+          "when": "view == configDebt.sidebarView",
+          "group": "navigation"
+        },
+        {
+          "command": "configDebt.openDashboard",
+          "when": "view == configDebt.sidebarView",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Configuration Debt Tracker",
+      "properties": {
+        "configDebt.geminiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Gemini API key for natural language explanations. Core detection is 100% deterministic and does not require this key."
+        },
+        "configDebt.staleAgeDaysThreshold": {
+          "type": "number",
+          "default": 90,
+          "description": "Age threshold in days to flag configuration items as potentially stale."
+        },
+        "configDebt.excludePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/node_modules/**",
+            "**/.git/**",
+            "**/dist/**",
+            "**/build/**",
+            "**/target/**",
+            "**/vendor/**",
+            "**/coverage/**",
+            "**/.venv/**",
+            "**/__pycache__/**"
+          ],
+          "description": "Glob patterns to exclude from configuration scanning and source code analysis."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./dist/tests/runTests.js",
+    "demo": "node ./dist/scripts/demonstrate.js"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "mocha": "^10.2.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.3.5",
+    "yaml": "^2.3.4"
+  }
+}
