@@ -9,7 +9,9 @@ export type ConfigurationFormat =
   | 'json'
   | 'xml'
   | 'dockerfile'
-  | 'kubernetes';
+  | 'kubernetes'
+  | 'toml'
+  | 'properties';
 
 export type ConfigurationType =
   | 'env-var'
@@ -20,7 +22,9 @@ export type ConfigurationType =
   | 'docker-arg'
   | 'k8s-configmap'
   | 'k8s-secret'
-  | 'k8s-env';
+  | 'k8s-env'
+  | 'toml-property'
+  | 'properties-entry';
 
 export type SensitivityLevel =
   | 'public'

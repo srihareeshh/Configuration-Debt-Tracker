@@ -10,6 +10,7 @@ import { runParserTests } from './parsers/parsers.test';
 import { runIntegrationTests } from './pipeline/integration.test';
 import { runRiskTests } from './risk/riskEngine.test';
 import { runServicesTests } from './services/services.test';
+import { runAITests } from './ai/ai.test';
 
 async function main(): Promise<void> {
   const startTime = Date.now();
@@ -31,6 +32,8 @@ async function main(): Promise<void> {
     await runServicesTests();
     console.log('');
     await runIntegrationTests();
+    console.log('');
+    await runAITests();
     console.log('');
 
     const elapsed = Date.now() - startTime;

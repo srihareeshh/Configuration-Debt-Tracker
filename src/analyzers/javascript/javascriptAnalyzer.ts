@@ -90,6 +90,7 @@ export class JavascriptAnalyzer implements ILanguageAnalyzer {
       language: fileInfo.extension.startsWith('.t') ? 'typescript' : 'javascript',
       usageType,
       confidence,
+      confidenceLevel: confidence >= 95 ? 1 : 3,
       patternMatched: pattern
     });
   }

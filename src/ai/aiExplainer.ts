@@ -1,14 +1,15 @@
 /**
- * Configuration Debt Tracker - AI Explainer Layer (Optional Module)
- * Provides natural-language explanations and remediation guidance based strictly
- * on deterministic findings and evidence.
- *
- * Privacy Guarantee: NEVER transmits raw secret values or sensitive file contents.
- * Resiliency Guarantee: Fully functional offline via deterministic explanation engine.
+ * Configuration Debt Tracker - Upgraded AI Explainer & Repository Intelligence
+ * Bridges RepositoryIndex, RetrievalEngine, PromptBuilder, and AIProviderFactory.
+ * Guarantees zero secret exposure, grounded citations, and 100% offline fallback.
  */
 
+import { RepositoryIndex } from '../code-intelligence/index/repositoryIndex';
+import { RetrievalEngine } from '../code-intelligence/retrieval/retrievalEngine';
 import { DebtFinding } from '../models/finding';
 import { ScanResult } from '../models/scan';
+import { AIProviderFactory, ProviderSettings } from './aiProviderFactory';
+import { PromptBuilder } from './promptBuilder';
 
 export interface ExplanationResponse {
   summary: string;
@@ -16,101 +17,165 @@ export interface ExplanationResponse {
   evidenceExplanation: string;
   verificationSteps: string[];
   remediationAdvice: string;
-  provider: 'gemini' | 'deterministic-offline';
+  provider: string;
+}
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  providerId: string;
+  providerName: string;
+  message: string;
+  latencyMs?: number;
 }
 
 export class AiExplainer {
+  private repositoryIndex: RepositoryIndex;
+  private retrievalEngine: RetrievalEngine;
+  private promptBuilder = new PromptBuilder();
+  private providerFactory = new AIProviderFactory();
+
+  constructor(repositoryIndex?: RepositoryIndex) {
+    this.repositoryIndex = repositoryIndex || new RepositoryIndex();
+    this.retrievalEngine = new RetrievalEngine(this.repositoryIndex);
+  }
+
+  updateRepositoryIndex(scanResult: ScanResult): void {
+    this.repositoryIndex.buildIndex(
+      scanResult.workspaceName,
+      scanResult.workspacePath,
+      scanResult.items,
+      scanResult.findings,
+      scanResult.usageMap
+    );
+  }
+
   /**
-   * Generates an explainable breakdown for a finding.
-   * Uses Gemini API if an API key is provided and reachable; otherwise uses
-   * the deterministic explanation engine.
+   * Tests connection to the configured AI provider
+   */
+  async testConnection(settings: ProviderSettings): Promise<ConnectionTestResult> {
+    const provider = this.providerFactory.resolveProvider(settings);
+    const startTime = Date.now();
+
+    try {
+      if (provider.id === 'offline') {
+        return {
+          ok: true,
+          providerId: provider.id,
+          providerName: provider.name,
+          message: 'Offline deterministic reasoning engine is active and ready (no API key required).'
+        };
+      }
+
+      const available = await provider.isAvailable();
+      if (!available) {
+        return {
+          ok: false,
+          providerId: provider.id,
+          providerName: provider.name,
+          message: `Provider '${provider.name}' is currently unavailable or missing configuration.`
+        };
+      }
+
+      // Send lightweight ping
+      const resp = await provider.chat(
+        [{ role: 'user', content: 'Ping. Respond with OK.' }],
+        { maxTokens: 10, timeoutMs: 5000 }
+      );
+
+      return {
+        ok: true,
+        providerId: provider.id,
+        providerName: provider.name,
+        message: `Connected successfully to ${provider.name} (${resp.modelUsed}).`,
+        latencyMs: Date.now() - startTime
+      };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        providerId: provider.id,
+        providerName: provider.name,
+        message: `Connection test failed: ${msg}`,
+        latencyMs: Date.now() - startTime
+      };
+    }
+  }
+
+  /**
+   * Conversational assistant over indexed repository using targeted RAG retrieval
+   */
+  async chatWithAssistant(
+    userPrompt: string,
+    scanResult: ScanResult | null,
+    settings: ProviderSettings = {}
+  ): Promise<string> {
+    if (!scanResult) {
+      return 'No scan available. Please run a workspace scan first to analyze configurations and source code.';
+    }
+
+    this.updateRepositoryIndex(scanResult);
+
+    // 1. Retrieve compact, redacted evidence context
+    const context = this.retrievalEngine.retrieveContext(userPrompt);
+
+    // 2. Build grounded prompt
+    const messages = this.promptBuilder.buildGroundedMessages(context, userPrompt);
+
+    // 3. Resolve active provider
+    const provider = this.providerFactory.resolveProvider(settings);
+
+    try {
+      const response = await provider.chat(messages, { timeoutMs: settings.timeoutMs || 25000 });
+      return response.content.trim();
+    } catch {
+      // Graceful fallback to offline deterministic engine
+      const offline = this.providerFactory.getOfflineProvider();
+      const fallbackResp = await offline.chat(messages);
+      return `[Offline Fallback Mode]\n${fallbackResp.content}`;
+    }
+  }
+
+  /**
+   * Explains a specific configuration debt finding
    */
   async explainFinding(
     finding: DebtFinding,
-    apiKey?: string
+    settings: ProviderSettings = {}
   ): Promise<ExplanationResponse> {
-    const key = (apiKey || '').trim();
+    const item = finding.configurationItem;
+    const offlineResp = this.generateDeterministicExplanation(finding);
 
-    if (key.length > 0) {
+    const provider = this.providerFactory.resolveProvider(settings);
+    if (provider.id !== 'offline') {
       try {
-        const geminiResult = await this.queryGemini(finding, key);
-        if (geminiResult) {
-          return geminiResult;
-        }
+        const prompt = `Explain configuration finding:
+- Key: ${item.key}
+- Category: ${finding.categoryLabel}
+- Risk: ${finding.riskScore}/100 (${finding.severity.toUpperCase()})
+- Location: ${item.filePath}:${item.line}
+- Evidence: ${finding.evidence.join(' ')}`;
+
+        const msgs = this.promptBuilder.buildFindingExplanationMessages(prompt);
+        const resp = await provider.chat(msgs, { maxTokens: 500, timeoutMs: 15000 });
+
+        return {
+          summary: `${finding.title}`,
+          whyFlagged: resp.content,
+          evidenceExplanation: finding.evidence.join(' '),
+          verificationSteps: offlineResp.verificationSteps,
+          remediationAdvice: finding.recommendation,
+          provider: provider.name
+        };
       } catch {
-        // Fall back gracefully to offline deterministic engine
+        // Fall back to deterministic explanation
       }
     }
 
-    return this.generateDeterministicExplanation(finding);
+    return offlineResp;
   }
 
   /**
-   * Safe, privacy-preserving Gemini API integration using native fetch
-   */
-  private async queryGemini(
-    finding: DebtFinding,
-    apiKey: string
-  ): Promise<ExplanationResponse | null> {
-    const sanitizedPrompt = `You are a senior Software Configuration Management (SCM) architect analyzing a configuration debt finding.
-
-Finding Metadata (No sensitive contents included):
-- Configuration Key: ${finding.configurationItem.key}
-- Debt Category: ${finding.categoryLabel}
-- Risk Score: ${finding.riskScore}/100 (${finding.severity.toUpperCase()})
-- Risk Breakdown: Age ${finding.riskBreakdown.ageScore}/25, Usage ${finding.riskBreakdown.usageScore}/35, Impact ${finding.riskBreakdown.impactScore}/25, Sensitivity ${finding.riskBreakdown.sensitivityScore}/15
-- File: ${finding.configurationItem.filePath}:${finding.configurationItem.line}
-- Format: ${finding.configurationItem.format.toUpperCase()}
-- Evidence: ${finding.evidence.join(' ')}
-
-Respond with a strictly formatted JSON object with these keys:
-{
-  "summary": "1-2 sentence executive summary of this configuration debt",
-  "whyFlagged": "detailed explanation of why the static analysis engine flagged this item",
-  "evidenceExplanation": "explanation of what the evidence proves",
-  "verificationSteps": ["step 1 to verify before touching", "step 2", "step 3"],
-  "remediationAdvice": "concrete technical steps to remediate safely without breaking production"
-}`;
-
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: sanitizedPrompt }] }],
-        generationConfig: {
-          temperature: 0.2,
-          responseMimeType: 'application/json'
-        }
-      })
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const data = (await response.json()) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
-    };
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
-      return null;
-    }
-
-    const parsed = JSON.parse(text);
-    return {
-      summary: parsed.summary || 'Configuration debt finding explanation',
-      whyFlagged: parsed.whyFlagged || '',
-      evidenceExplanation: parsed.evidenceExplanation || '',
-      verificationSteps: Array.isArray(parsed.verificationSteps) ? parsed.verificationSteps : [],
-      remediationAdvice: parsed.remediationAdvice || '',
-      provider: 'gemini'
-    };
-  }
-
-  /**
-   * Deterministic explanation engine that operates 100% offline without external dependencies.
+   * Deterministic explanation generator operating 100% offline
    */
   generateDeterministicExplanation(finding: DebtFinding): ExplanationResponse {
     const item = finding.configurationItem;
@@ -118,65 +183,64 @@ Respond with a strictly formatted JSON object with these keys:
 
     let summary = '';
     let whyFlagged = '';
-    let evidenceExplanation = '';
+    let evidenceExplanation = finding.evidence.join(' ');
     let verificationSteps: string[] = [];
-    let remediationAdvice = '';
+    let remediationAdvice = finding.recommendation;
 
     switch (cat) {
       case 'dead_configuration':
         summary = `Configuration setting '${item.key}' in '${item.filePath}' appears to be dead code that is no longer referenced anywhere in the repository.`;
-        whyFlagged = `The static analysis engine scanned all Python, TypeScript, JavaScript, and Java files and found zero instances of '${item.key}' being loaded via environment variables, configuration helpers, or property annotations.`;
-        evidenceExplanation = `0 references detected across the entire source code inventory. Leaving dead configuration creates cognitive overhead and can mislead developers into believing obsolete infrastructure or flags are still active.`;
+        whyFlagged = `The static analysis engine scanned all source files across JavaScript, TypeScript, Python, Java, Go, Rust, and C# and found zero direct or framework references to '${item.key}'.`;
         verificationSteps = [
-          `Search git commit history to determine when '${item.key}' was introduced and who owns it.`,
-          `Check if '${item.key}' is injected dynamically via runtime deployment templates or external CI/CD pipelines not present in this workspace.`,
-          `Run a test build or staging deployment with '${item.key}' commented out to confirm no hidden reflection or dynamic lookups fail.`
+          `Search git history to verify when '${item.key}' was introduced and which component required it.`,
+          `Check whether '${item.key}' is injected dynamically in external CI/CD or Helm manifests outside this repo.`,
+          `Test a staging build with '${item.key}' commented out to confirm no runtime reflection fails.`
         ];
-        remediationAdvice = `Delete the line '${item.key}' from '${item.filePath}:${item.line}' and re-run the Configuration Debt Tracker scan to confirm resolved debt.`;
+        break;
+
+      case 'configuration_drift':
+        summary = `Configuration setting '${item.key}' exhibits active value drift across multiple configuration files.`;
+        whyFlagged = `Multiple files define '${item.key}' with divergent values. Environments using different configuration files will experience conflicting behavior.`;
+        verificationSteps = [
+          `Compare the distinct values defined across the affected files (${finding.affectedFiles.join(', ')}).`,
+          `Determine which file serves as the canonical source of truth for each target environment.`
+        ];
         break;
 
       case 'duplicated_configuration':
-        summary = `The configuration key '${item.key}' is declared across multiple files (${finding.affectedFiles.join(', ')}), creating high risk of configuration drift.`;
-        whyFlagged = `Multiple configuration files contain duplicate definitions. If one file is updated during maintenance while another is overlooked, local, containerized, and production environments will behave inconsistently.`;
-        evidenceExplanation = finding.evidence.join(' ');
+        summary = `The configuration key '${item.key}' is declared across multiple files (${finding.affectedFiles.join(', ')}).`;
+        whyFlagged = `Identical configuration settings exist in multiple files. If one file is updated during maintenance while another is overlooked, configuration drift will occur.`;
         verificationSteps = [
-          `Compare the values defined in each file (${finding.affectedFiles.join(', ')}) to verify whether they are meant to be identical or environment-specific.`,
-          `Identify which file serves as the single authoritative source of truth (e.g. '.env' for local development or Helm/K8s for clusters).`
+          `Check whether duplicate declarations in ${finding.affectedFiles.join(', ')} can be consolidated into a single root file or container env injection.`
         ];
-        remediationAdvice = `Centralize the definition of '${item.key}' in the root configuration file or environment template, and reference it via variable interpolation or container env injection.`;
         break;
 
       case 'hardcoded_secret':
         summary = `A sensitive credential or API key was detected in plaintext in '${item.filePath}:${item.line}'.`;
-        whyFlagged = `The secret detection engine matched a known credential pattern (${finding.secretDetectionType || 'API key/secret token'}) or high-entropy literal. Committing plaintext secrets into repository files exposes infrastructure to unauthorized access.`;
-        evidenceExplanation = `The value matched credential heuristics and is currently stored unencrypted in version control. Zero-exposure masking was applied in the UI.`;
+        whyFlagged = `The secret detection engine matched a known credential pattern or high-entropy literal. Committing plaintext secrets into repository files exposes infrastructure to unauthorized access.`;
         verificationSteps = [
-          `Immediately check whether '${item.key}' represents an active production credential or a local test dummy.`,
-          `If this is a real secret, revoke and rotate the credential immediately in your provider dashboard (e.g. Stripe, AWS, database host).`,
+          `Check immediately whether '${item.key}' represents an active production credential or a local test dummy.`,
+          `If this is a real secret, revoke and rotate the credential immediately in your provider dashboard.`,
           `Verify that your repository's .gitignore properly excludes local '.env' files.`
         ];
-        remediationAdvice = `1. Rotate the compromised credential.\n2. Move the value into an external secret store or local uncommitted .env file.\n3. Replace the plaintext value with a runtime environment variable reference.`;
+        remediationAdvice = `1. Rotate the compromised credential.\n2. Move the value into an external secret store or uncommitted .env file.\n3. Replace the plaintext value with a runtime environment variable reference.`;
         break;
 
-      case 'stale_configuration':
-        summary = `Configuration item '${item.key}' appears to be an obsolete or temporary feature flag that has lingered in the codebase.`;
-        whyFlagged = `The key name or file modification age indicates a legacy, temporary, or deprecated configuration that should have been retired after feature rollout.`;
-        evidenceExplanation = finding.evidence.join(' ');
+      case 'unused_feature_flag':
+        summary = `Feature flag '${item.key}' in '${item.filePath}' is declared but not referenced anywhere in code.`;
+        whyFlagged = `The key matches feature flag naming conventions but has 0 active usages or conditional branches in the indexed source code.`;
         verificationSteps = [
-          `Verify whether the underlying feature or migration associated with '${item.key}' has completed.`,
-          `Review source references to verify if both branches of the feature flag are still maintained.`
+          `Confirm whether the feature was fully shipped or discontinued.`,
+          `Remove the dormant configuration flag to reduce cognitive debt.`
         ];
-        remediationAdvice = `Decommission the flag: remove the toggle from '${item.filePath}', remove the conditional branching in the source code, and retain only the permanent implementation.`;
         break;
 
-      case 'undocumented_configuration':
-        summary = `Configuration setting '${item.key}' in '${item.filePath}' has no documentation or explanatory comments.`;
-        whyFlagged = `Configuration without documentation increases onboarding friction and causes misconfiguration during deployment or maintenance.`;
-        evidenceExplanation = `No comments or docstrings were found preceding or inline with line ${item.line}.`;
+      default:
+        summary = `Configuration debt item: ${finding.title}`;
+        whyFlagged = finding.evidence.join(' ');
         verificationSteps = [
-          `Determine what type of values '${item.key}' accepts, what the default behavior is if omitted, and which team/service owns it.`
+          `Review the setting in '${item.filePath}:${item.line}' against its active consumers.`
         ];
-        remediationAdvice = `Add a comment directly above '${item.key}' in '${item.filePath}' explaining its purpose, valid values, defaults, and owner.`;
         break;
     }
 
@@ -186,99 +250,11 @@ Respond with a strictly formatted JSON object with these keys:
       evidenceExplanation,
       verificationSteps,
       remediationAdvice,
-      provider: 'deterministic-offline'
+      provider: 'Deterministic Offline Engine'
     };
   }
 
-  /**
-   * Conversational LLM assistant interface for querying configuration debt
-   */
-  async chatWithAssistant(
-    userPrompt: string,
-    scanResult: ScanResult | null,
-    apiKey?: string
-  ): Promise<string> {
-    const key = (apiKey || '').trim();
-    if (key.length > 0 && scanResult) {
-      try {
-        const topFindingsSummary = scanResult.findings.slice(0, 5).map(f =>
-          `- ${f.title} (${f.severity.toUpperCase()}, risk ${f.riskScore}): ${f.suggestedAction} in ${f.configurationItem.filePath}:${f.configurationItem.line}`
-        ).join('\n');
-
-        const prompt = `You are an AI Software Configuration Management (SCM) expert for the Configuration Debt Tracker extension.
-Current Repository State:
-- Workspace: ${scanResult.workspaceName}
-- Health Score: ${scanResult.healthScore.score}/100 (${scanResult.healthScore.grade})
-- Total Items: ${scanResult.inventory.totalItems} (${scanResult.inventory.usedItems} used, ${scanResult.inventory.unusedItems} unused)
-- Critical Issues: ${scanResult.inventory.bySeverity.critical}
-- High Issues: ${scanResult.inventory.bySeverity.high}
-- Top Findings:\n${topFindingsSummary}
-
-User question: "${userPrompt}"
-
-Give a concise, highly professional developer response (under 150 words) with actionable SCM guidance. Never reveal raw secrets.`;
-
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`;
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.3 }
-          })
-        });
-        if (response.ok) {
-          const data = (await response.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-          const answer = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (answer) return answer.trim();
-        }
-      } catch {
-        // Fall back to offline assistant
-      }
-    }
-
-    return this.generateOfflineAssistantResponse(userPrompt, scanResult);
-  }
-
-  private generateOfflineAssistantResponse(query: string, scanResult: ScanResult | null): string {
-    if (!scanResult) {
-      return "No workspace scan results found. Click 'Scan Workspace' to identify configuration items and analyze configuration debt.";
-    }
-
-    const q = query.toLowerCase();
-    const inv = scanResult.inventory;
-    const topFindings = scanResult.findings;
-
-    if (q.includes('critical') || q.includes('risk') || q.includes('top')) {
-      const crits = topFindings.filter(f => f.severity === 'critical');
-      if (crits.length === 0) {
-        return `Great news! There are 0 critical configuration findings in ${scanResult.workspaceName}. Focus on resolving the ${inv.bySeverity.high} high-severity findings next.`;
-      }
-      return `Identified ${crits.length} Critical Issue(s):\n` +
-        crits.map((f, i) => `${i + 1}. ${f.title} (${f.configurationItem.filePath}:${f.configurationItem.line}) -> ${f.suggestedAction}`).join('\n');
-    }
-
-    if (q.includes('health') || q.includes('score')) {
-      return `Configuration Health is currently ${scanResult.healthScore.score}/100 (${scanResult.healthScore.grade}). Deductions were applied for ${inv.bySeverity.critical} critical item(s) (-${Math.min(45, inv.bySeverity.critical * 10)} pts) and ${inv.bySeverity.high} high-risk item(s). Cleaning up dead configurations and consolidating duplicates will restore health to >85.`;
-    }
-
-    if (q.includes('duplicate') || q.includes('drift')) {
-      const dups = topFindings.filter(f => f.category === 'duplicated_configuration');
-      if (dups.length === 0) return "No duplicated configurations detected across your configuration files.";
-      return `Found ${dups.length} duplicated configuration setting(s). Ensure you consolidate these into a single authoritative file (e.g. '.env' or root config) and inject values via environment variables to avoid runtime desynchronization.`;
-    }
-
-    if (q.includes('secret') || q.includes('password') || q.includes('token') || q.includes('key')) {
-      const secrets = topFindings.filter(f => f.category === 'hardcoded_secret');
-      if (secrets.length === 0) return "No plaintext secrets detected in tracked configuration files.";
-      return `Found ${secrets.length} plaintext secret(s). Recommended SCM procedure: 1. Rotate the compromised tokens in provider dashboards. 2. Remove values from version control. 3. Inject them at runtime using an encrypted secrets vault or local uncommitted .env.`;
-    }
-
-    // Default overview response
-    return `Configuration Debt Summary for ${scanResult.workspaceName}:
-• Health Score: ${scanResult.healthScore.score}/100 (${scanResult.healthScore.grade})
-• Total Tracked: ${inv.totalItems} items (${inv.usedItems} active, ${inv.unusedItems} unused dead code)
-• Priority Cleanups: ${inv.bySeverity.critical} Critical, ${inv.bySeverity.high} High, ${inv.bySeverity.medium} Medium
-Remediation Recommendation: Address the top #${topFindings[0]?.configurationItem.key || '1'} finding in ${topFindings[0]?.configurationItem.filePath || 'your configuration'} first.`;
+  getRetrievalEngine(): RetrievalEngine {
+    return this.retrievalEngine;
   }
 }

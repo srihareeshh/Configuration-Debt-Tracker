@@ -10,6 +10,8 @@ import { DockerParser } from './docker/dockerParser';
 import { EnvParser } from './env/envParser';
 import { JsonParser } from './json/jsonParser';
 import { KubernetesParser } from './kubernetes/kubernetesParser';
+import { PropertiesParser } from './properties/propertiesParser';
+import { TomlParser } from './toml/tomlParser';
 import { XmlParser } from './xml/xmlParser';
 import { YamlParser } from './yaml/yamlParser';
 
@@ -23,6 +25,8 @@ export class ParserRegistry {
     this.parsers.push(new EnvParser());
     this.parsers.push(new YamlParser());
     this.parsers.push(new JsonParser());
+    this.parsers.push(new TomlParser());
+    this.parsers.push(new PropertiesParser());
     this.parsers.push(new XmlParser());
   }
 

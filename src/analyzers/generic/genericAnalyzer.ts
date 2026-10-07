@@ -46,6 +46,7 @@ export class GenericAnalyzer implements ILanguageAnalyzer {
           language: 'generic',
           usageType: 'dynamic',
           confidence: 65,
+          confidenceLevel: 7,
           patternMatched: `Word boundary: ${key}`
         });
       }

@@ -1,10 +1,10 @@
 /**
- * Configuration Debt Tracker - Scan Results, Health Score & History Models
+ * Configuration Debt Tracker - Scan Results, Health Score, Impact & History Models
  * Maps directly to SCM Status Accounting and Configuration Control
  */
 
 import { ConfigurationFormat, ConfigurationItem } from './configuration';
-import { DebtFinding } from './finding';
+import { DebtCategory, DebtFinding } from './finding';
 import { Severity } from './risk';
 import { UsageAnalysis } from './usage';
 
@@ -30,10 +30,12 @@ export interface ScanInventory {
   usedItems: number;
   unusedItems: number;
   duplicateItems: number;
+  driftItems: number;
   secretItems: number;
   undocumentedItems: number;
   byFormat: Record<ConfigurationFormat, number>;
   bySeverity: Record<Severity, number>;
+  byCategory: Record<DebtCategory, number>;
 }
 
 export type CleanupStatus = 'open' | 'needs_review' | 'resolved' | 'ignored';
@@ -67,6 +69,20 @@ export interface ScanHistoryEntry {
   mediumCount: number;
   lowCount: number;
   deltaFromPrevious?: number;
+}
+
+export interface ImpactAnalysisResult {
+  configurationKey: string;
+  declaredLocations: { file: string; line: number; format: ConfigurationFormat }[];
+  staticReferenceCount: number;
+  affectedFilesCount: number;
+  affectedFiles: string[];
+  affectedSymbols: { name: string; kind: string; file: string; line: number }[];
+  staticDependencyEvidence: { file: string; line: number; snippet: string; confidence: number }[];
+  confidence: number;
+  impactLevel: 'Critical' | 'High' | 'Medium' | 'Low';
+  blindSpots: string[];
+  removalAdvisory: string;
 }
 
 export interface ScanResult {

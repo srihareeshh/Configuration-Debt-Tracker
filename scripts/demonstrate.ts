@@ -108,6 +108,31 @@ async function runDemo(): Promise<void> {
   }
 
   console.log('\n================================================================================');
+  console.log('REMOVAL IMPACT ASSESSMENT ("What Breaks If I Delete This?")');
+  console.log('================================================================================');
+  const { ImpactAnalyzer } = require('../src/core/impact/impactAnalyzer');
+  const impactAnalyzer = new ImpactAnalyzer();
+  const impact = impactAnalyzer.assessRemovalImpact('DATABASE_URL', result);
+  console.log(`Assessing Removal of: ${impact.configurationKey}`);
+  console.log(`Impact Severity:     ${impact.impactLevel.toUpperCase()}`);
+  console.log(`Static References:   ${impact.staticReferenceCount}`);
+  console.log(`Affected Files:      ${impact.affectedFilesCount} (${impact.affectedFiles.join(', ')})`);
+  console.log(`Affected Symbols:    ${impact.affectedSymbols.map((s: any) => `${s.name} (${s.kind})`).join(', ') || 'Global scope'}`);
+  console.log(`Removal Advisory:    ${impact.removalAdvisory}`);
+  console.log(`Blind Spots to Check:`);
+  impact.blindSpots.forEach((b: string) => console.log(`  - ${b}`));
+
+  console.log('\n================================================================================');
+  console.log('REPOSITORY-AWARE AI ASSISTANT (Grounding & Zero Hallucination)');
+  console.log('================================================================================');
+  const aiExplainer = new AiExplainer();
+  const sampleQuery = 'Where is DATABASE_URL used and what depends on it?';
+  console.log(`User Query: "${sampleQuery}"`);
+  const assistantResponse = await aiExplainer.chatWithAssistant(sampleQuery, result, { providerType: 'offline' });
+  console.log('\nAssistant Response:');
+  console.log(assistantResponse);
+
+  console.log('\n================================================================================');
   console.log('DEMONSTRATION COMPLETE — SCM AUDIT PASSED WITH DISTINCTION');
   console.log('================================================================================');
 }

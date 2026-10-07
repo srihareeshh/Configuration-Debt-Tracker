@@ -218,4 +218,53 @@ spec:
     assert.ok(k8sItems.some((i) => i.key === 'CLUSTER_REGION' && i.type === 'k8s-env'));
     console.log('✓ KubernetesParser passed');
   }
+
+  // 7. TOML Parser Test
+  {
+    const { TomlParser } = await import('../../src/parsers/toml/tomlParser');
+    const parser = new TomlParser();
+    const fileInfo: ScannedFileInfo = {
+      absolutePath: '/mock/config.toml',
+      relativePath: 'config.toml',
+      filename: 'config.toml',
+      extension: '.toml',
+      mtime: new Date(),
+      ageDays: 2
+    };
+    const content = `
+# Global configuration
+[database]
+host = "db.internal"
+port = 5432
+`;
+    const items = await parser.parse(fileInfo, content);
+    assert.strictEqual(items.length, 2, 'TomlParser should extract 2 items');
+    assert.ok(items.some((i) => i.key === 'database.host' && i.value === 'db.internal'));
+    console.log('✓ TomlParser passed');
+  }
+
+  // 8. Properties Parser Test
+  {
+    const { PropertiesParser } = await import('../../src/parsers/properties/propertiesParser');
+    const parser = new PropertiesParser();
+    const fileInfo: ScannedFileInfo = {
+      absolutePath: '/mock/application.properties',
+      relativePath: 'application.properties',
+      filename: 'application.properties',
+      extension: '.properties',
+      mtime: new Date(),
+      ageDays: 1
+    };
+    const content = `
+# Database setup
+database.url=postgres://localhost:5432/app
+server.port: 8080
+`;
+    const items = await parser.parse(fileInfo, content);
+    assert.strictEqual(items.length, 2, 'PropertiesParser should extract 2 items');
+    assert.ok(items.some((i) => i.key === 'database.url'));
+    assert.ok(items.some((i) => i.key === 'server.port' && i.value === '8080'));
+    console.log('✓ PropertiesParser passed');
+  }
 }
+

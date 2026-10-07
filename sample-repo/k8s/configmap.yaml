@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  API_TIMEOUT: "5000"
+  CACHE_TTL: "3600"

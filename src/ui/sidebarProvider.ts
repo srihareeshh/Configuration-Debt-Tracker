@@ -1,13 +1,15 @@
 /**
  * Configuration Debt Tracker - Sidebar Webview Provider
- * Pixel-perfect alignment with VS Code diagnostic sidebar design + LLM Assistant.
+ * Pixel-perfect diagnostic sidebar with zero fake defaults and integrated repository assistant.
  */
 
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { AiExplainer } from '../ai/aiExplainer';
+import { ImpactAnalyzer } from '../core/impact/impactAnalyzer';
 import { ScanResult } from '../models/scan';
 import { HistoryService } from '../services/historyService';
+import { RemediationService } from '../services/remediationService';
 import { ScanService } from '../services/scanService';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
@@ -15,6 +17,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private currentResult: ScanResult | null = null;
   private aiExplainer: AiExplainer;
+  private impactAnalyzer = new ImpactAnalyzer();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -42,23 +45,73 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case 'scan':
           await vscode.commands.executeCommand('configDebt.scanWorkspace');
           break;
+
         case 'openDashboard':
           await vscode.commands.executeCommand('configDebt.openDashboard');
           break;
+
         case 'jumpTo':
           if (message.file && message.line) {
             await this.jumpToLocation(message.file, message.line);
           }
           break;
+
+        case 'assessImpact':
+          if (message.key && this.currentResult) {
+            const impact = this.impactAnalyzer.assessRemovalImpact(message.key, this.currentResult);
+            this.view?.webview.postMessage({
+              command: 'impactResponse',
+              impact
+            });
+          }
+          break;
+
+        case 'preparePatch':
+          if (message.findingId && this.currentResult) {
+            const finding = this.currentResult.findings.find((f) => f.id === message.findingId);
+            if (finding) {
+              const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+              const remediationService = new RemediationService(workspaceFolder?.uri.fsPath || '');
+              const proposal = remediationService.prepareProposal(finding);
+              if (proposal) {
+                const choice = await vscode.window.showInformationMessage(
+                  `Proposed Patch for ${finding.configurationItem.key}:\n${proposal.proposedDiff}`,
+                  'Apply Patch',
+                  'Cancel'
+                );
+                if (choice === 'Apply Patch') {
+                  const res = await remediationService.applyProposal(proposal);
+                  if (res.success) {
+                    vscode.window.showInformationMessage(res.message);
+                    await vscode.commands.executeCommand('configDebt.scanWorkspace');
+                  } else {
+                    vscode.window.showErrorMessage(res.message);
+                  }
+                }
+              }
+            }
+          }
+          break;
+
         case 'askLlm':
           if (message.prompt) {
             const config = vscode.workspace.getConfiguration('configDebt');
-            const apiKey = config.get<string>('geminiApiKey') || process.env.GEMINI_API_KEY;
+            const providerType = config.get<any>('aiProvider') || 'offline';
+            const model = config.get<string>('aiModel') || '';
+            const endpoint = config.get<string>('aiEndpoint') || '';
+            const apiKey = config.get<string>('geminiApiKey') || process.env.GEMINI_API_KEY || '';
+
             const answer = await this.aiExplainer.chatWithAssistant(
               message.prompt,
               this.currentResult,
-              apiKey
+              {
+                providerType,
+                model,
+                endpoint,
+                geminiApiKey: apiKey
+              }
             );
+
             this.view?.webview.postMessage({
               command: 'llmResponse',
               answer
@@ -71,6 +124,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   public async updateResult(result: ScanResult): Promise<void> {
     this.currentResult = result;
+    this.aiExplainer.updateRepositoryIndex(result);
     await this.updateViewHtml();
   }
 
@@ -102,19 +156,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       editor.selection = new vscode.Selection(lineRange.start, lineRange.end);
       editor.revealRange(lineRange, vscode.TextEditorRevealType.InCenter);
     } catch {
-      // Ignore
+      // Ignore navigation errors
     }
   }
 
   private getHtmlContent(history: any[]): string {
     const res = this.currentResult;
-    const prevDelta = history.length > 1 && history[history.length - 1].deltaFromPrevious !== undefined
-      ? history[history.length - 1].deltaFromPrevious
-      : undefined;
-
-    // Previous score for sparkline
-    const prevScore = history.length > 1 ? history[history.length - 2].healthScore : (res ? Math.max(0, res.healthScore.score - 11) : 70);
-    const currScore = res ? res.healthScore.score : 82;
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -154,14 +201,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       user-select: none;
     }
 
-    /* Section divider */
     .divider {
       height: 1px;
       background: var(--border);
       margin: 12px 0;
     }
 
-    /* Header title */
     .sidebar-header {
       display: flex;
       justify-content: space-between;
@@ -183,10 +228,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     .icon-btn {
       background: none;
-      border: none;
-      color: var(--subtle);
+      border: 1px solid var(--border);
+      color: var(--fg);
       cursor: pointer;
-      padding: 3px 6px;
+      padding: 3px 7px;
       font-size: 11px;
       border-radius: 2px;
       display: inline-flex;
@@ -195,208 +240,215 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     .icon-btn:hover {
-      color: var(--fg);
       background: var(--card-bg);
+      border-color: var(--subtle);
     }
 
     .section-label {
       font-size: 10px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.6px;
+      letter-spacing: 0.5px;
       color: var(--subtle);
+      margin-bottom: 6px;
+    }
+
+    /* Empty state */
+    .empty-state-box {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 16px 12px;
+      text-align: center;
+    }
+
+    .empty-state-box h3 {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: var(--fg);
+    }
+
+    .empty-state-box p {
+      font-size: 11px;
+      color: var(--subtle);
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: var(--accent-fg);
+      border: none;
+      padding: 5px 12px;
+      font-size: 11px;
+      font-weight: 500;
+      border-radius: 2px;
+      cursor: pointer;
+      width: 100%;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+    }
+
+    /* Health */
+    .health-container {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
       margin-bottom: 8px;
     }
 
-    /* HEALTH Section */
-    .health-container {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      margin-bottom: 10px;
-    }
-
     .health-score {
+      font-family: var(--font-mono);
       font-size: 26px;
       font-weight: 700;
-      font-family: var(--font-mono);
-      color: var(--fg);
       line-height: 1;
     }
 
-    .health-score span.denom {
+    .health-score .denom {
       font-size: 13px;
       color: var(--subtle);
-      font-weight: normal;
+      font-weight: 400;
     }
 
     .health-delta {
-      font-size: 11px;
       font-family: var(--font-mono);
+      font-size: 12px;
       font-weight: 600;
       color: #3fb950;
-      background: rgba(63, 185, 80, 0.12);
-      border: 1px solid rgba(63, 185, 80, 0.3);
-      padding: 1px 6px;
-      border-radius: 2px;
+      display: flex;
+      align-items: center;
+      gap: 2px;
     }
 
     .health-delta.negative {
       color: var(--crit);
-      background: rgba(241, 76, 76, 0.12);
-      border-color: rgba(241, 76, 76, 0.3);
     }
 
-    /* Severity Counters Row */
     .severity-row {
-      display: flex;
-      justify-content: space-between;
-      font-size: 11px;
-      font-family: var(--font-mono);
-      margin-bottom: 2px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 4px;
+      font-size: 10px;
+      text-align: center;
+      margin-bottom: 4px;
     }
 
     .sev-item {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
+      padding: 4px 2px;
+      border-radius: 2px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
     }
 
-    .sev-item.critical { color: var(--crit); }
-    .sev-item.high { color: var(--high); }
-    .sev-item.medium { color: var(--med); }
-    .sev-item.low { color: var(--low); }
+    .sev-item.critical { border-left: 2px solid var(--crit); }
+    .sev-item.high { border-left: 2px solid var(--high); }
+    .sev-item.medium { border-left: 2px solid var(--med); }
+    .sev-item.low { border-left: 2px solid var(--low); }
 
-    /* INVENTORY Section */
+    /* Inventory */
     .inventory-stats {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--fg);
       display: flex;
-      gap: 12px;
+      justify-content: space-between;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 8px 10px;
+      font-size: 11px;
+      font-family: var(--font-mono);
     }
 
-    .inv-stat-item strong {
-      color: var(--fg);
+    /* Priority Cleanup Cards */
+    .cleanup-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
 
-    /* PRIORITY CLEANUP Section */
     .cleanup-card {
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 2px;
       padding: 8px 10px;
-      margin-bottom: 8px;
       cursor: pointer;
-      transition: border-color 0.1s ease, background 0.1s ease;
+      transition: border-color 0.15s ease;
     }
 
     .cleanup-card:hover {
       border-color: var(--subtle);
-      background: rgba(255, 255, 255, 0.03);
     }
 
-    .card-top {
+    .cleanup-header {
       display: flex;
+      justify-content: space-between;
       align-items: center;
-      gap: 6px;
-      margin-bottom: 3px;
-    }
-
-    .sev-badge {
-      font-size: 9px;
-      font-weight: 700;
-      font-family: var(--font-mono);
-      padding: 1px 4px;
-      border-radius: 2px;
-      letter-spacing: 0.3px;
-      text-transform: uppercase;
-    }
-
-    .sev-badge.critical {
-      color: var(--crit);
-      background: rgba(241, 76, 76, 0.15);
-      border: 1px solid rgba(241, 76, 76, 0.3);
-    }
-
-    .sev-badge.high {
-      color: var(--high);
-      background: rgba(232, 133, 0, 0.15);
-      border: 1px solid rgba(232, 133, 0, 0.3);
-    }
-
-    .sev-badge.medium {
-      color: var(--med);
-      background: rgba(204, 167, 0, 0.15);
-      border: 1px solid rgba(204, 167, 0, 0.3);
     }
 
     .card-key {
       font-family: var(--font-mono);
       font-weight: 600;
-      color: var(--fg);
       font-size: 11px;
+      color: var(--fg);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      max-width: 140px;
     }
 
     .card-loc {
       font-family: var(--font-mono);
       font-size: 10px;
       color: var(--subtle);
-      margin-left: 2px;
     }
 
-    .card-reason {
+    .card-desc {
       font-size: 11px;
       color: var(--subtle);
-      margin-top: 2px;
+      margin-top: 3px;
       line-height: 1.3;
     }
 
-    /* HEALTH TREND Section */
+    .card-actions {
+      display: flex;
+      gap: 4px;
+      margin-top: 6px;
+    }
+
+    .card-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--subtle);
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 2px;
+      cursor: pointer;
+    }
+
+    .card-btn:hover {
+      color: var(--fg);
+      border-color: var(--fg);
+    }
+
+    /* Trend */
     .trend-box {
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 2px;
-      padding: 10px 12px;
-    }
-
-    .trend-sparkline {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      padding: 8px 10px;
       font-family: var(--font-mono);
       font-size: 11px;
       color: var(--subtle);
+      text-align: center;
     }
 
-    .trend-svg {
-      flex: 1;
-      height: 28px;
-      margin: 0 10px;
-    }
-
-    /* LLM Assistant Box */
-    .llm-section {
+    /* AI Assistant */
+    .llm-box {
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 2px;
       padding: 10px;
-      margin-top: 4px;
-    }
-
-    .llm-title {
-      font-size: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: var(--fg);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-bottom: 8px;
     }
 
     .llm-input-row {
@@ -410,8 +462,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       background: var(--bg);
       border: 1px solid var(--border);
       color: var(--fg);
-      padding: 5px 8px;
       font-size: 11px;
+      padding: 5px 8px;
       border-radius: 2px;
       outline: none;
     }
@@ -420,22 +472,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       border-color: var(--accent);
     }
 
-    .llm-send-btn {
+    .llm-submit {
       background: var(--accent);
       color: var(--accent-fg);
       border: none;
-      padding: 5px 9px;
+      padding: 5px 10px;
       font-size: 11px;
-      font-weight: 600;
       border-radius: 2px;
       cursor: pointer;
     }
 
-    .llm-send-btn:hover {
-      background: var(--accent-hover);
-    }
-
-    .llm-chips {
+    .chips-row {
       display: flex;
       flex-wrap: wrap;
       gap: 4px;
@@ -443,10 +490,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     .chip {
-      background: rgba(255, 255, 255, 0.05);
+      background: var(--bg);
       border: 1px solid var(--border);
-      font-size: 10px;
       color: var(--subtle);
+      font-size: 10px;
       padding: 2px 6px;
       border-radius: 2px;
       cursor: pointer;
@@ -457,7 +504,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       border-color: var(--subtle);
     }
 
-    .llm-response-box {
+    .llm-response {
       display: none;
       background: var(--bg);
       border: 1px solid var(--border);
@@ -471,169 +518,154 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       overflow-y: auto;
     }
 
-    .llm-response-box.active {
+    .llm-response.active {
       display: block;
     }
   </style>
 </head>
 <body>
 
-  <!-- Sidebar Header -->
+  <!-- Header -->
   <div class="sidebar-header">
     <h2>Configuration Debt</h2>
     <div class="header-actions">
-      <button class="icon-btn" onclick="postMsg('scan')" title="Scan Workspace">Scan</button>
-      <button class="icon-btn" onclick="postMsg('openDashboard')" title="Open Full Dashboard">Dashboard</button>
+      <button class="icon-btn" onclick="postMsg('scan')">Scan</button>
+      <button class="icon-btn" onclick="postMsg('openDashboard')">Dashboard</button>
     </div>
   </div>
 
   <div class="divider"></div>
 
-  <!-- HEALTH Section -->
-  <div class="section-label">HEALTH</div>
-  <div class="health-container">
-    <div class="health-score">
-      ${res ? res.healthScore.score : 82} <span class="denom">/ 100</span>
+  ${!res ? `
+    <!-- Genuine Empty State: Zero Fake Defaults -->
+    <div class="empty-state-box">
+      <h3>No scan available</h3>
+      <p>Run a workspace scan to analyze configuration items, track debt, and assess risk.</p>
+      <button class="btn-primary" onclick="postMsg('scan')">Scan Workspace</button>
     </div>
-    <div class="health-delta ${(prevDelta ?? 11) >= 0 ? '' : 'negative'}">
-      ${(prevDelta ?? 11) >= 0 ? '↑' : '↓'} ${Math.abs(prevDelta ?? 11)}
-    </div>
-  </div>
-
-  <div class="severity-row">
-    <span class="sev-item critical"><strong>${res ? res.inventory.bySeverity.critical : 3}</strong> Critical</span>
-    <span class="sev-item high"><strong>${res ? res.inventory.bySeverity.high : 7}</strong> High</span>
-    <span class="sev-item medium"><strong>${res ? res.inventory.bySeverity.medium : 12}</strong> Medium</span>
-    <span class="sev-item low"><strong>${res ? res.inventory.bySeverity.low : 8}</strong> Low</span>
-  </div>
-
-  <div class="divider"></div>
-
-  <!-- CONFIGURATION INVENTORY Section -->
-  <div class="section-label">CONFIGURATION INVENTORY</div>
-  <div class="inventory-stats">
-    <div class="inv-stat-item"><strong>${res ? res.inventory.totalItems : 74}</strong> total</div>
-    <div class="inv-stat-item"><strong style="color:#3fb950;">${res ? res.inventory.usedItems : 52}</strong> used</div>
-    <div class="inv-stat-item"><strong style="color:var(--crit);">${res ? res.inventory.unusedItems : 11}</strong> unused</div>
-  </div>
-
-  <div class="divider"></div>
-
-  <!-- PRIORITY CLEANUP Section -->
-  <div class="section-label">PRIORITY CLEANUP</div>
-
-  ${res && res.cleanupItems.length > 0 ? res.cleanupItems.slice(0, 4).map(item => `
-    <div class="cleanup-card" onclick="jumpTo('${item.file}', ${item.line})">
-      <div class="card-top">
-        <span class="sev-badge ${item.severity}">${item.severity}</span>
-        <span class="card-key">${item.key}</span>
+  ` : `
+    <!-- HEALTH -->
+    <div class="section-label">HEALTH</div>
+    <div class="health-container">
+      <div class="health-score">
+        ${res.healthScore.score} <span class="denom">/ 100</span>
       </div>
-      <div class="card-loc">${item.file}:${item.line}</div>
-      <div class="card-reason">${item.evidence}</div>
-    </div>
-  `).join('') : `
-    <div class="cleanup-card" onclick="jumpTo('.env', 12)">
-      <div class="card-top">
-        <span class="sev-badge critical">CRITICAL</span>
-        <span class="card-key">OLD_API_URL</span>
+      <div class="health-delta">
+        ${res.healthScore.grade}
       </div>
-      <div class="card-loc">.env:12</div>
-      <div class="card-reason">No references detected</div>
     </div>
 
-    <div class="cleanup-card" onclick="jumpTo('src/config.ts', 42)">
-      <div class="card-top">
-        <span class="sev-badge critical">CRITICAL</span>
-        <span class="card-key">API_KEY</span>
-      </div>
-      <div class="card-loc">src/config.ts:42</div>
-      <div class="card-reason">Potential hardcoded secret</div>
+    <div class="severity-row">
+      <div class="sev-item critical"><strong>${res.inventory.bySeverity.critical}</strong> Crit</div>
+      <div class="sev-item high"><strong>${res.inventory.bySeverity.high}</strong> High</div>
+      <div class="sev-item medium"><strong>${res.inventory.bySeverity.medium}</strong> Med</div>
+      <div class="sev-item low"><strong>${res.inventory.bySeverity.low}</strong> Low</div>
     </div>
 
-    <div class="cleanup-card" onclick="jumpTo('.env', 14)">
-      <div class="card-top">
-        <span class="sev-badge high">HIGH</span>
-        <span class="card-key">API_TIMEOUT</span>
-      </div>
-      <div class="card-loc">3 configuration files</div>
-      <div class="card-reason">Possible duplication</div>
+    <div class="divider"></div>
+
+    <!-- CONFIGURATION INVENTORY -->
+    <div class="section-label">CONFIGURATION INVENTORY</div>
+    <div class="inventory-stats">
+      <span><strong>${res.inventory.totalItems}</strong> total</span>
+      <span style="color:#3fb950;"><strong>${res.inventory.usedItems}</strong> used</span>
+      <span style="color:var(--crit);"><strong>${res.inventory.unusedItems}</strong> unused</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- PRIORITY CLEANUP -->
+    <div class="section-label">PRIORITY CLEANUP</div>
+    <div class="cleanup-list">
+      ${res.findings.slice(0, 3).map((f) => `
+        <div class="cleanup-card">
+          <div class="cleanup-header" onclick="jumpTo('${f.configurationItem.filePath}', ${f.configurationItem.line})">
+            <span class="card-key">${f.configurationItem.key}</span>
+            <span class="card-loc">${f.configurationItem.filePath}:${f.configurationItem.line}</span>
+          </div>
+          <div class="card-desc">${f.categoryLabel} &bull; Risk: ${f.riskScore} (${f.severity})</div>
+          <div class="card-actions">
+            <button class="card-btn" onclick="assessImpact('${f.configurationItem.key}')">Impact</button>
+            <button class="card-btn" onclick="preparePatch('${f.id}')">Fix</button>
+            <button class="card-btn" onclick="askAboutFinding('${f.configurationItem.key}')">Ask AI</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- HEALTH TREND -->
+    <div class="section-label">HEALTH TREND</div>
+    <div class="trend-box">
+      ${history.length > 1
+        ? history.slice(-4).map((h) => `${h.healthScore}`).join(' ─────── ')
+        : `${res.healthScore.score} / 100 (${res.healthScore.grade})`}
     </div>
   `}
 
   <div class="divider"></div>
 
-  <!-- HEALTH TREND Section -->
-  <div class="section-label">HEALTH TREND</div>
-  <div class="trend-box">
-    <div class="trend-sparkline">
-      <span>${prevScore}</span>
-      <svg class="trend-svg" viewBox="0 0 100 24" preserveAspectRatio="none">
-        <path d="M 0 18 Q 25 18, 35 6 T 65 6 Q 75 18, 100 12" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" />
-        <circle cx="0" cy="18" r="2.5" fill="var(--subtle)" />
-        <circle cx="100" cy="12" r="2.5" fill="var(--fg)" />
-      </svg>
-      <span style="font-weight:700; color:var(--fg);">${currScore}</span>
-    </div>
-  </div>
-
-  <div class="divider"></div>
-
-  <!-- LLM CONFIGURATION ASSISTANT -->
-  <div class="llm-section">
-    <div class="llm-title">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2 2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/>
-        <rect x="4" y="8" width="16" height="12" rx="2"/>
-        <circle cx="9" cy="13" r="1.5" fill="currentColor"/>
-        <circle cx="15" cy="13" r="1.5" fill="currentColor"/>
-      </svg>
-      LLM Configuration Assistant
-    </div>
-
-    <div class="llm-chips">
-      <span class="chip" onclick="askChip('Explain my critical configuration debts')">Critical Issues</span>
-      <span class="chip" onclick="askChip('How do I fix duplicated configuration drift?')">Fix Drift</span>
-      <span class="chip" onclick="askChip('Generate safe secrets remediation steps')">Remediate Secrets</span>
+  <!-- AI ASSISTANT -->
+  <div class="section-label">AI ASSISTANT</div>
+  <div class="llm-box">
+    <div class="chips-row">
+      <span class="chip" onclick="askQuick('Where is DATABASE_URL used?')">DATABASE_URL</span>
+      <span class="chip" onclick="askQuick('Explain configuration drift')">Drift</span>
+      <span class="chip" onclick="askQuick('Which configuration has highest risk?')">Highest Risk</span>
     </div>
 
     <div class="llm-input-row">
-      <input type="text" id="llmPrompt" class="llm-input" placeholder="Ask LLM about this debt..." onkeydown="handleKey(event)">
-      <button class="llm-send-btn" onclick="sendLlmPrompt()">Ask</button>
+      <input type="text" id="llmInput" class="llm-input" placeholder="Ask about repository configuration..." onkeydown="handleKey(event)" />
+      <button class="llm-submit" onclick="submitLlm()">Ask</button>
     </div>
 
-    <div id="llmResponse" class="llm-response-box"></div>
+    <div id="llmResponse" class="llm-response"></div>
   </div>
 
   <script>
     const vscode = acquireVsCodeApi();
 
-    function postMsg(command) {
-      vscode.postMessage({ command });
+    function postMsg(cmd) {
+      vscode.postMessage({ command: cmd });
     }
 
     function jumpTo(file, line) {
       vscode.postMessage({ command: 'jumpTo', file, line });
     }
 
+    function assessImpact(key) {
+      vscode.postMessage({ command: 'assessImpact', key });
+    }
+
+    function preparePatch(findingId) {
+      vscode.postMessage({ command: 'preparePatch', findingId });
+    }
+
+    function askAboutFinding(key) {
+      const input = document.getElementById('llmInput');
+      input.value = "Why is " + key + " flagged and what breaks if I delete it?";
+      submitLlm();
+    }
+
+    function askQuick(text) {
+      const input = document.getElementById('llmInput');
+      input.value = text;
+      submitLlm();
+    }
+
     function handleKey(e) {
-      if (e.key === 'Enter') {
-        sendLlmPrompt();
-      }
+      if (e.key === 'Enter') submitLlm();
     }
 
-    function askChip(promptText) {
-      document.getElementById('llmPrompt').value = promptText;
-      sendLlmPrompt();
-    }
-
-    function sendLlmPrompt() {
-      const input = document.getElementById('llmPrompt');
-      const text = (input.value || '').trim();
+    function submitLlm() {
+      const input = document.getElementById('llmInput');
+      const text = input.value.trim();
       if (!text) return;
 
       const respBox = document.getElementById('llmResponse');
       respBox.classList.add('active');
-      respBox.innerText = 'Thinking... analyzing deterministic SCM evidence...';
+      respBox.textContent = "Analyzing repository index and retrieving evidence...";
 
       vscode.postMessage({ command: 'askLlm', prompt: text });
     }
@@ -643,7 +675,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       if (msg.command === 'llmResponse') {
         const respBox = document.getElementById('llmResponse');
         respBox.classList.add('active');
-        respBox.innerText = msg.answer;
+        respBox.textContent = msg.answer;
+      } else if (msg.command === 'impactResponse') {
+        const respBox = document.getElementById('llmResponse');
+        respBox.classList.add('active');
+        const imp = msg.impact;
+        respBox.textContent = "REMOVAL IMPACT: " + imp.configurationKey + "\\n" +
+          "Impact Level: " + imp.impactLevel + "\\n" +
+          "References: " + imp.staticReferenceCount + " across " + imp.affectedFilesCount + " file(s)\\n" +
+          "Advisory: " + imp.removalAdvisory;
       }
     });
   </script>

@@ -79,6 +79,48 @@
         "title": "Configuration Debt: Explain Finding",
         "category": "Configuration Debt",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "configDebt.askAssistant",
+        "title": "Configuration Debt: Ask Repository Assistant",
+        "category": "Configuration Debt",
+        "icon": "$(hubot)"
+      },
+      {
+        "command": "configDebt.explainSelection",
+        "title": "Configuration Debt: Explain Selection",
+        "category": "Configuration Debt",
+        "icon": "$(search)"
+      },
+      {
+        "command": "configDebt.assessImpact",
+        "title": "Configuration Debt: Assess Removal Impact",
+        "category": "Configuration Debt",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "configDebt.testAiConnection",
+        "title": "Configuration Debt: Test AI Connection",
+        "category": "Configuration Debt",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "configDebt.watchWorkspace",
+        "title": "Configuration Debt: Watch Workspace",
+        "category": "Configuration Debt",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "configDebt.rebuildIndex",
+        "title": "Configuration Debt: Rebuild Code Index",
+        "category": "Configuration Debt",
+        "icon": "$(database)"
+      },
+      {
+        "command": "configDebt.showFindings",
+        "title": "Configuration Debt: Show Findings",
+        "category": "Configuration Debt",
+        "icon": "$(list-unordered)"
       }
     ],
     "menus": {
@@ -93,20 +135,73 @@
           "when": "view == configDebt.sidebarView",
           "group": "navigation"
         }
+      ],
+      "editor/context": [
+        {
+          "command": "configDebt.explainSelection",
+          "when": "editorHasSelection",
+          "group": "ConfigurationDebt"
+        }
       ]
     },
     "configuration": {
       "title": "Configuration Debt Tracker",
       "properties": {
+        "configDebt.aiProvider": {
+          "type": "string",
+          "enum": ["offline", "local", "gemini", "openai"],
+          "default": "offline",
+          "description": "Active AI intelligence provider. 'offline' is 100% deterministic and private."
+        },
+        "configDebt.aiModel": {
+          "type": "string",
+          "default": "llama3",
+          "description": "Model identifier for local (e.g. llama3) or cloud (e.g. gemini-1.5-flash, gpt-4o-mini) providers."
+        },
+        "configDebt.aiEndpoint": {
+          "type": "string",
+          "default": "http://localhost:11434/v1",
+          "description": "Endpoint URL for local or OpenAI-compatible LLM runtimes."
+        },
+        "configDebt.aiTimeout": {
+          "type": "number",
+          "default": 25000,
+          "description": "Timeout in milliseconds for AI requests."
+        },
         "configDebt.geminiApiKey": {
           "type": "string",
           "default": "",
-          "description": "Optional Gemini API key for natural language explanations. Core detection is 100% deterministic and does not require this key."
+          "description": "Optional Gemini API key for natural language explanations."
+        },
+        "configDebt.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional OpenAI or custom endpoint API key."
         },
         "configDebt.staleAgeDaysThreshold": {
           "type": "number",
           "default": 90,
           "description": "Age threshold in days to flag configuration items as potentially stale."
+        },
+        "configDebt.enableWatchMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically watch workspace files and incrementally update configuration debt."
+        },
+        "configDebt.maxFileSize": {
+          "type": "number",
+          "default": 2097152,
+          "description": "Maximum file size in bytes to analyze (default: 2MB)."
+        },
+        "configDebt.analysisConfidenceThreshold": {
+          "type": "number",
+          "default": 50,
+          "description": "Minimum confidence percentage required to report a configuration reference."
+        },
+        "configDebt.enableGenericFallback": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Level 7 generic text matching when specialized language analyzers find no matches."
         },
         "configDebt.excludePatterns": {
           "type": "array",

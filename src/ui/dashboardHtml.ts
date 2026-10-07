@@ -737,9 +737,14 @@ export function getDashboardHtml(scanResult: ScanResult | null, history: ScanHis
         <option value="all">All Categories</option>
         <option value="dead_configuration">Dead Configuration</option>
         <option value="duplicated_configuration">Duplicated Configuration</option>
+        <option value="configuration_drift">Configuration Drift</option>
         <option value="hardcoded_secret">Hardcoded Secret</option>
         <option value="stale_configuration">Stale Configuration</option>
-        <option value="undocumented_configuration">Undocumented</option>
+        <option value="unused_feature_flag">Unused Feature Flag</option>
+        <option value="undocumented_configuration">Undocumented Configuration</option>
+        <option value="suspicious_dynamic_reference">Suspicious Dynamic Reference</option>
+        <option value="test_only_configuration">Test-Only Configuration</option>
+        <option value="weak_evidence_configuration">Weak Evidence Configuration</option>
       </select>
       <select id="statusFilter" class="select-input" onchange="applyFilters()">
         <option value="all">All Statuses</option>

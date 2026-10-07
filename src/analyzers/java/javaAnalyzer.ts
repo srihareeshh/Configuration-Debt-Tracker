@@ -91,6 +91,7 @@ export class JavaAnalyzer implements ILanguageAnalyzer {
       language: 'java',
       usageType,
       confidence,
+      confidenceLevel: confidence >= 95 ? 1 : 3,
       patternMatched: pattern
     });
   }

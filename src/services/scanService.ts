@@ -87,7 +87,8 @@ export class ScanService {
     }
     const { healthScore, inventory } = this.healthCalculator.calculateHealthScore(
       scanRes.items,
-      findings
+      findings,
+      usageMap
     );
 
     // Stage 5: Build Cleanup Backlog

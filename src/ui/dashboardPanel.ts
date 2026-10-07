@@ -102,6 +102,8 @@ export class DashboardPanel {
     line?: number;
     findingId?: string;
     status?: string;
+    key?: string;
+    prompt?: string;
   }): Promise<void> {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     const workspaceRoot = workspaceFolder ? workspaceFolder.uri.fsPath : '';
@@ -136,13 +138,70 @@ export class DashboardPanel {
         }
         break;
 
+      case 'assessImpact':
+        if (message.key && this.currentResult) {
+          const impact = new (require('../core/impact/impactAnalyzer').ImpactAnalyzer)().assessRemovalImpact(message.key, this.currentResult);
+          this.panel.webview.postMessage({
+            command: 'impactResponse',
+            impact
+          });
+        }
+        break;
+
+      case 'preparePatch':
+        if (message.findingId && this.currentResult) {
+          const finding = this.currentResult.findings.find((f) => f.id === message.findingId);
+          if (finding) {
+            const remediationService = new (require('../services/remediationService').RemediationService)(workspaceRoot);
+            const proposal = remediationService.prepareProposal(finding);
+            if (proposal) {
+              const choice = await vscode.window.showInformationMessage(
+                `Proposed Patch for ${finding.configurationItem.key}:\n${proposal.proposedDiff}`,
+                'Apply Patch',
+                'Cancel'
+              );
+              if (choice === 'Apply Patch') {
+                const res = await remediationService.applyProposal(proposal);
+                if (res.success) {
+                  vscode.window.showInformationMessage(res.message);
+                  await this.runScan();
+                } else {
+                  vscode.window.showErrorMessage(res.message);
+                }
+              }
+            }
+          }
+        }
+        break;
+
+      case 'askLlm':
+        if (message.prompt) {
+          const config = vscode.workspace.getConfiguration('configDebt');
+          const providerType = config.get<any>('aiProvider') || 'offline';
+          const model = config.get<string>('aiModel') || '';
+          const endpoint = config.get<string>('aiEndpoint') || '';
+          const apiKey = config.get<string>('geminiApiKey') || process.env.GEMINI_API_KEY || '';
+
+          const answer = await this.aiExplainer.chatWithAssistant(
+            message.prompt,
+            this.currentResult,
+            { providerType, model, endpoint, geminiApiKey: apiKey }
+          );
+
+          this.panel.webview.postMessage({
+            command: 'llmResponse',
+            answer
+          });
+        }
+        break;
+
       case 'explain':
         if (message.findingId && this.currentResult) {
           const finding = this.currentResult.findings.find((f) => f.id === message.findingId);
           if (finding) {
             const config = vscode.workspace.getConfiguration('configDebt');
             const apiKey = config.get<string>('geminiApiKey') || process.env.GEMINI_API_KEY;
-            const explanation = await this.aiExplainer.explainFinding(finding, apiKey);
+            const explanation = await this.aiExplainer.explainFinding(finding, { geminiApiKey: apiKey });
             this.panel.webview.postMessage({
               command: 'aiExplanation',
               findingId: message.findingId,

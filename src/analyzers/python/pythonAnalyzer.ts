@@ -99,6 +99,7 @@ export class PythonAnalyzer implements ILanguageAnalyzer {
       language: 'python',
       usageType,
       confidence,
+      confidenceLevel: confidence >= 95 ? 1 : 3,
       patternMatched: pattern
     });
   }

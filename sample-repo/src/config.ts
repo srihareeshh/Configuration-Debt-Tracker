@@ -13,5 +13,12 @@ export const config: AppConfig = {
   timeoutMs: parseInt(process.env.API_TIMEOUT || '5000', 10)
 };
 
-// Line 16: Hardcoded secret token directly in source code
+// Test dynamic access (Level 5 / 6)
+const dynamicKey = "DATABASE_" + "URL";
+export const dynamicDbUrl = process.env[dynamicKey];
+
+// Comment test: The line below must NOT be treated as a live reference!
+// const deadRef = process.env.OLD_API_URL;
+
+// Hardcoded secret token directly in source code
 export const INTERNAL_GITHUB_SYNC_TOKEN = "mock_ghp_1234567890abcdef1234567890abcdef1234";

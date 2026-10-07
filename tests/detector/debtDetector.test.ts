@@ -105,8 +105,8 @@ export async function runDetectorTests(): Promise<void> {
       {
         id: 'application.yml:4:API_TIMEOUT',
         key: 'API_TIMEOUT',
-        value: '10000', // Value drift!
-        maskedValue: '10000',
+        value: '5000', // Identical value - true duplicate
+        maskedValue: '5000',
         filePath: 'application.yml',
         absoluteFilePath: '/mock/application.yml',
         line: 4,
@@ -134,8 +134,7 @@ export async function runDetectorTests(): Promise<void> {
     const dupFinding = findings.find((f) => f.category === 'duplicated_configuration');
     assert.ok(dupFinding, 'Duplicate finding must be generated');
     assert.strictEqual(dupFinding?.affectedFiles.length, 2, 'Should detect 2 affected files');
-    assert.ok(dupFinding?.evidence.some((e) => e.includes('DRIFT')), 'Should detect value drift between 5000 and 10000');
-    console.log('✓ Duplicated configuration and drift detection passed');
+    console.log('✓ Duplicated configuration detection passed');
   }
 
   // Test 4: Hardcoded Secret Detection
@@ -244,5 +243,164 @@ export async function runDetectorTests(): Promise<void> {
     const undocFinding = findings.find((f) => f.category === 'undocumented_configuration');
     assert.ok(undocFinding, 'Undocumented configuration should be flagged');
     console.log('✓ Undocumented configuration detection passed');
+  }
+
+  // Test 7: Value Drift Detection
+  {
+    const driftItems: ConfigurationItem[] = [
+      {
+        id: '.env:1:CACHE_TTL',
+        key: 'CACHE_TTL',
+        value: '3600',
+        maskedValue: '3600',
+        filePath: '.env',
+        absoluteFilePath: '/mock/.env',
+        line: 1,
+        format: 'env',
+        type: 'env-var',
+        sensitivity: 'public',
+        ageDays: 10,
+        isPotentialSecret: false
+      },
+      {
+        id: 'application.yml:10:CACHE_TTL',
+        key: 'CACHE_TTL',
+        value: '7200',
+        maskedValue: '7200',
+        filePath: 'application.yml',
+        absoluteFilePath: '/mock/application.yml',
+        line: 10,
+        format: 'yaml',
+        type: 'yaml-property',
+        sensitivity: 'public',
+        ageDays: 10,
+        isPotentialSecret: false
+      }
+    ];
+
+    const usageMap: Record<string, UsageAnalysis> = {
+      CACHE_TTL: {
+        key: 'CACHE_TTL',
+        isUsed: true,
+        confidence: 95,
+        statusText: 'Used',
+        referenceCount: 1,
+        references: [],
+        referencingFiles: ['src/cache.ts']
+      }
+    };
+
+    const findings = detector.detectDebt(driftItems, usageMap);
+    const driftFinding = findings.find((f) => f.category === 'configuration_drift');
+    assert.ok(driftFinding, 'Configuration drift finding must be generated when values differ');
+    assert.strictEqual(driftFinding?.category, 'configuration_drift');
+    console.log('✓ Configuration drift detection passed');
+  }
+
+  // Test 8: Unused Feature Flag Detection
+  {
+    const ffItem: ConfigurationItem = {
+      id: '.env:20:FEATURE_DARK_MODE',
+      key: 'FEATURE_DARK_MODE',
+      value: 'false',
+      maskedValue: 'false',
+      filePath: '.env',
+      absoluteFilePath: '/mock/.env',
+      line: 20,
+      format: 'env',
+      type: 'env-var',
+      sensitivity: 'public',
+      ageDays: 30,
+      isPotentialSecret: false
+    };
+
+    const usageMap: Record<string, UsageAnalysis> = {
+      FEATURE_DARK_MODE: {
+        key: 'FEATURE_DARK_MODE',
+        isUsed: false,
+        confidence: 0,
+        statusText: 'Unused',
+        referenceCount: 0,
+        references: [],
+        referencingFiles: []
+      }
+    };
+
+    const findings = detector.detectDebt([ffItem], usageMap);
+    const ffFinding = findings.find((f) => f.category === 'unused_feature_flag');
+    assert.ok(ffFinding, 'Unused feature flag must be categorized as unused_feature_flag, not plain dead');
+    console.log('✓ Unused feature flag detection passed');
+  }
+
+  // Test 9: Test-Only Configuration Detection
+  {
+    const testOnlyItem: ConfigurationItem = {
+      id: '.env:30:MOCK_PAYMENT_GATEWAY',
+      key: 'MOCK_PAYMENT_GATEWAY',
+      value: 'true',
+      maskedValue: 'true',
+      filePath: '.env',
+      absoluteFilePath: '/mock/.env',
+      line: 30,
+      format: 'env',
+      type: 'env-var',
+      sensitivity: 'public',
+      ageDays: 15,
+      isPotentialSecret: false
+    };
+
+    const usageMap: Record<string, UsageAnalysis> = {
+      MOCK_PAYMENT_GATEWAY: {
+        key: 'MOCK_PAYMENT_GATEWAY',
+        isUsed: true,
+        confidence: 96,
+        statusText: 'Used',
+        referenceCount: 2,
+        references: [],
+        referencingFiles: ['tests/payments.test.ts', 'tests/e2e/checkout.spec.ts'],
+        isTestOnly: true
+      }
+    };
+
+    const findings = detector.detectDebt([testOnlyItem], usageMap);
+    const testFinding = findings.find((f) => f.category === 'test_only_configuration');
+    assert.ok(testFinding, 'Should detect test-only configuration declared in root config');
+    console.log('✓ Test-only configuration detection passed');
+  }
+
+  // Test 10: Suspicious Dynamic Reference Detection
+  {
+    const dynItem: ConfigurationItem = {
+      id: '.env:40:DYNAMIC_ROUTE',
+      key: 'DYNAMIC_ROUTE',
+      value: '/api/v2',
+      maskedValue: '/api/v2',
+      filePath: '.env',
+      absoluteFilePath: '/mock/.env',
+      line: 40,
+      format: 'env',
+      type: 'env-var',
+      sensitivity: 'public',
+      ageDays: 20,
+      isPotentialSecret: false
+    };
+
+    const usageMap: Record<string, UsageAnalysis> = {
+      DYNAMIC_ROUTE: {
+        key: 'DYNAMIC_ROUTE',
+        isUsed: true,
+        confidence: 70,
+        statusText: 'Used',
+        referenceCount: 1,
+        references: [],
+        referencingFiles: ['src/router.ts'],
+        highestConfidenceLevel: 6
+      }
+    };
+
+    const findings = detector.detectDebt([dynItem], usageMap);
+    const dynFinding = findings.find((f) => f.category === 'suspicious_dynamic_reference');
+    assert.ok(dynFinding, 'Should detect suspicious dynamic reference for Level 6 resolution');
+    console.log('✓ Suspicious dynamic reference detection passed');
   }
 }

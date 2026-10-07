@@ -67,7 +67,7 @@ export async function runServicesTests(): Promise<void> {
       workspacePath: tmpDir,
       timestamp: Date.now() - 60000,
       healthScore: { score: 71, grade: 'Moderate', baseScore: 100, deductions: [], summary: '' },
-      inventory: { totalItems: 10, usedItems: 6, unusedItems: 4, duplicateItems: 0, secretItems: 0, undocumentedItems: 0, byFormat: {} as any, bySeverity: { critical: 2, high: 2, medium: 0, low: 0 } },
+      inventory: { totalItems: 10, usedItems: 6, unusedItems: 4, duplicateItems: 0, driftItems: 0, secretItems: 0, undocumentedItems: 0, byFormat: {} as any, bySeverity: { critical: 2, high: 2, medium: 0, low: 0 }, byCategory: {} as any },
       findings: [mockFinding],
       items: [],
       usageMap: {},

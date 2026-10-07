@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-service
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: app
+          image: api-service:v1.2.0
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: database-url
+            - name: API_TIMEOUT
+              value: "5000"
