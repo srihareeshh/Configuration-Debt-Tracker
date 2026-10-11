@@ -20,9 +20,18 @@
     "audit",
     "cleanup"
   ],
-  "main": "./dist/extension.js",
+  "main": "./dist/src/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onCommand:configurationDebt.setGeminiApiKey",
+    "onCommand:configurationDebt.removeGeminiApiKey",
+    "onCommand:configurationDebt.testGeminiConnection",
+    "onCommand:configDebt.setGeminiApiKey",
+    "onCommand:configDebt.removeGeminiApiKey",
+    "onCommand:configDebt.testGeminiConnection",
+    "onCommand:configDebt.openAiAssistant",
+    "onCommand:configDebt.scanWorkspace",
+    "onCommand:configDebt.openDashboard"
   ],
   "contributes": {
     "viewsContainers": {
