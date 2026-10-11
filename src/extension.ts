@@ -135,104 +135,114 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(askAssistantAlias);
 
   // 4. Command: Set Gemini API Key
-  const setApiKeyCommand = vscode.commands.registerCommand(
-    'configDebt.setGeminiApiKey',
-    async () => {
-      const apiKey = await vscode.window.showInputBox({
-        prompt: 'Enter your Google Gemini API key (stored encrypted in VS Code SecretStorage)',
-        password: true,
-        ignoreFocusOut: true,
-        placeHolder: 'AIzaSy...'
-      });
+  const handleSetApiKey = async () => {
+    const apiKey = await vscode.window.showInputBox({
+      prompt: 'Enter your Google Gemini API key (stored encrypted in VS Code SecretStorage)',
+      password: true,
+      ignoreFocusOut: true,
+      placeHolder: 'AIzaSy...'
+    });
 
-      if (!apiKey || !apiKey.trim()) {
-        vscode.window.showWarningMessage('No API key entered. Operation cancelled.');
-        return;
-      }
-
-      await secretService.setGeminiApiKey(apiKey);
-      vscode.window.showInformationMessage(
-        'Configuration Debt: Gemini API key stored securely in encrypted SecretStorage.'
-      );
-
-      // Offer to test connection immediately
-      const testNow = await vscode.window.showInformationMessage(
-        'Would you like to test the Gemini connection now?',
-        'Test Connection',
-        'Later'
-      );
-      if (testNow === 'Test Connection') {
-        await vscode.commands.executeCommand('configDebt.testGeminiConnection');
-      }
+    if (!apiKey || !apiKey.trim()) {
+      vscode.window.showWarningMessage('No API key entered. Operation cancelled.');
+      return;
     }
+
+    const trimmedKey = apiKey.trim();
+    await secretService.setGeminiApiKey(trimmedKey);
+
+    // Update active provider configuration immediately
+    const currentConfig = vscode.workspace.getConfiguration('configDebt');
+    const model = currentConfig.get<string>('aiModel') || 'gemini-2.5-flash';
+    aiExplainer.getProviderFactory().getGeminiProvider().updateConfig(trimmedKey, model);
+    aiExplainer.getProviderFactory().setGeminiStatus('Gemini: Connected');
+
+    vscode.window.showInformationMessage(
+      'Configuration Debt: Gemini API key stored securely in encrypted SecretStorage.'
+    );
+
+    // Offer to test connection immediately
+    const testNow = await vscode.window.showInformationMessage(
+      'Would you like to test the Gemini connection now?',
+      'Test Connection',
+      'Later'
+    );
+    if (testNow === 'Test Connection') {
+      await vscode.commands.executeCommand('configurationDebt.testGeminiConnection');
+    }
+  };
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('configurationDebt.setGeminiApiKey', handleSetApiKey),
+    vscode.commands.registerCommand('configDebt.setGeminiApiKey', handleSetApiKey)
   );
-  context.subscriptions.push(setApiKeyCommand);
 
   // 5. Command: Remove Gemini API Key
-  const removeApiKeyCommand = vscode.commands.registerCommand(
-    'configDebt.removeGeminiApiKey',
-    async () => {
-      await secretService.removeGeminiApiKey();
-      vscode.window.showInformationMessage(
-        'Configuration Debt: Gemini API key removed from SecretStorage.'
-      );
-    }
+  const handleRemoveApiKey = async () => {
+    await secretService.removeGeminiApiKey();
+
+    // Reset active provider configuration immediately
+    const currentConfig = vscode.workspace.getConfiguration('configDebt');
+    const model = currentConfig.get<string>('aiModel') || 'gemini-2.5-flash';
+    aiExplainer.getProviderFactory().getGeminiProvider().updateConfig('', model);
+    aiExplainer.getProviderFactory().setGeminiStatus('Gemini: Not configured');
+
+    vscode.window.showInformationMessage(
+      'Configuration Debt: Gemini API key removed from SecretStorage.'
+    );
+  };
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('configurationDebt.removeGeminiApiKey', handleRemoveApiKey),
+    vscode.commands.registerCommand('configDebt.removeGeminiApiKey', handleRemoveApiKey)
   );
-  context.subscriptions.push(removeApiKeyCommand);
 
   // 6. Command: Test Gemini Connection
-  const testGeminiCommand = vscode.commands.registerCommand(
-    'configDebt.testGeminiConnection',
-    async () => {
-      await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: 'Configuration Debt: Testing Gemini connection...',
-          cancellable: false
-        },
-        async () => {
-          const secretKey = await secretService.getGeminiApiKey();
-          const currentConfig = vscode.workspace.getConfiguration('configDebt');
-          const model = currentConfig.get<string>('aiModel') || 'gemini-2.5-flash';
-          const timeoutMs = currentConfig.get<number>('aiTimeout') || 25000;
+  const handleTestGemini = async () => {
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'Configuration Debt: Testing Gemini connection...',
+        cancellable: false
+      },
+      async () => {
+        const secretKey = await secretService.getGeminiApiKey();
+        const currentConfig = vscode.workspace.getConfiguration('configDebt');
+        const model = currentConfig.get<string>('aiModel') || 'gemini-2.5-flash';
+        const timeoutMs = currentConfig.get<number>('aiTimeout') || 25000;
 
-          if (!secretKey && !process.env.GEMINI_API_KEY) {
-            const setKeyChoice = await vscode.window.showWarningMessage(
-              'Gemini API key is not configured. Please set your key first.',
-              'Set Gemini API Key'
-            );
-            if (setKeyChoice === 'Set Gemini API Key') {
-              await vscode.commands.executeCommand('configDebt.setGeminiApiKey');
-            }
-            return;
+        if (!secretKey && !process.env.GEMINI_API_KEY) {
+          const setKeyChoice = await vscode.window.showWarningMessage(
+            'Gemini API key is not configured. Please set your key first.',
+            'Set Gemini API Key'
+          );
+          if (setKeyChoice === 'Set Gemini API Key') {
+            await vscode.commands.executeCommand('configurationDebt.setGeminiApiKey');
           }
-
-          const result = await aiExplainer.testConnection({
-            providerType: 'gemini',
-            model,
-            geminiApiKey: secretKey || process.env.GEMINI_API_KEY,
-            timeoutMs
-          });
-
-          if (result.ok) {
-            vscode.window.showInformationMessage(result.message);
-          } else {
-            vscode.window.showErrorMessage(result.message);
-          }
+          return;
         }
-      );
-    }
-  );
-  context.subscriptions.push(testGeminiCommand);
 
-  // Alias for backward compatibility: testAiConnection -> testGeminiConnection
-  const testAiAlias = vscode.commands.registerCommand(
-    'configDebt.testAiConnection',
-    async () => {
-      await vscode.commands.executeCommand('configDebt.testGeminiConnection');
-    }
+        const result = await aiExplainer.testConnection({
+          providerType: 'gemini',
+          model,
+          geminiApiKey: secretKey || process.env.GEMINI_API_KEY,
+          timeoutMs
+        });
+
+        if (result.ok) {
+          vscode.window.showInformationMessage(result.message);
+        } else {
+          vscode.window.showErrorMessage(result.message);
+        }
+      }
+    );
+  };
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('configurationDebt.testGeminiConnection', handleTestGemini),
+    vscode.commands.registerCommand('configDebt.testGeminiConnection', handleTestGemini),
+    vscode.commands.registerCommand('configDebt.testAiConnection', handleTestGemini)
   );
-  context.subscriptions.push(testAiAlias);
 
   // 7. Command: Explain Selection with AI
   const explainSelectionCommand = vscode.commands.registerCommand(

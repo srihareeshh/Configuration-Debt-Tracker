@@ -128,11 +128,11 @@ export class AssistantPanel {
         break;
 
       case 'testConnection':
-        await vscode.commands.executeCommand('configDebt.testGeminiConnection');
+        await vscode.commands.executeCommand('configurationDebt.testGeminiConnection');
         break;
 
       case 'setApiKey':
-        await vscode.commands.executeCommand('configDebt.setGeminiApiKey');
+        await vscode.commands.executeCommand('configurationDebt.setGeminiApiKey');
         break;
 
       case 'scanWorkspace':

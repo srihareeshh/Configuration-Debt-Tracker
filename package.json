@@ -46,109 +46,109 @@
     "commands": [
       {
         "command": "configDebt.scanWorkspace",
-        "title": "Configuration Debt: Scan Workspace",
+        "title": "Scan Workspace",
         "category": "Configuration Debt",
         "icon": "$(refresh)"
       },
       {
         "command": "configDebt.openDashboard",
-        "title": "Configuration Debt: Open Main Dashboard",
+        "title": "Open Main Dashboard",
         "category": "Configuration Debt",
         "icon": "$(dashboard)"
       },
       {
         "command": "configDebt.showBacklog",
-        "title": "Configuration Debt: Show Cleanup Backlog",
+        "title": "Show Cleanup Backlog",
         "category": "Configuration Debt",
         "icon": "$(checklist)"
       },
       {
         "command": "configDebt.refreshAnalysis",
-        "title": "Configuration Debt: Refresh Analysis",
+        "title": "Refresh Analysis",
         "category": "Configuration Debt",
         "icon": "$(sync)"
       },
       {
         "command": "configDebt.clearHistory",
-        "title": "Configuration Debt: Clear Scan History",
+        "title": "Clear Scan History",
         "category": "Configuration Debt",
         "icon": "$(trash)"
       },
       {
         "command": "configDebt.explainFinding",
-        "title": "Configuration Debt: Explain Finding",
+        "title": "Explain Finding",
         "category": "Configuration Debt",
         "icon": "$(comment-discussion)"
       },
       {
         "command": "configDebt.openAiAssistant",
-        "title": "Configuration Debt: Open AI Assistant",
+        "title": "Open AI Assistant",
         "category": "Configuration Debt",
         "icon": "$(hubot)"
       },
       {
-        "command": "configDebt.setGeminiApiKey",
-        "title": "Configuration Debt: Set Gemini API Key",
+        "command": "configurationDebt.setGeminiApiKey",
+        "title": "Set Gemini API Key",
         "category": "Configuration Debt",
         "icon": "$(key)"
       },
       {
-        "command": "configDebt.removeGeminiApiKey",
-        "title": "Configuration Debt: Remove Gemini API Key",
+        "command": "configurationDebt.removeGeminiApiKey",
+        "title": "Remove Gemini API Key",
         "category": "Configuration Debt",
         "icon": "$(trash)"
       },
       {
-        "command": "configDebt.testGeminiConnection",
-        "title": "Configuration Debt: Test Gemini Connection",
+        "command": "configurationDebt.testGeminiConnection",
+        "title": "Test Gemini Connection",
         "category": "Configuration Debt",
         "icon": "$(plug)"
       },
       {
         "command": "configDebt.explainSelection",
-        "title": "Configuration Debt: Explain Selection with AI",
+        "title": "Explain Selection with AI",
         "category": "Configuration Debt",
         "icon": "$(search)"
       },
       {
         "command": "configDebt.askAboutCurrentFile",
-        "title": "Configuration Debt: Ask About Current File",
+        "title": "Ask About Current File",
         "category": "Configuration Debt",
         "icon": "$(file-code)"
       },
       {
         "command": "configDebt.summarizeRepository",
-        "title": "Configuration Debt: Summarize Repository with AI",
+        "title": "Summarize Repository with AI",
         "category": "Configuration Debt",
         "icon": "$(book)"
       },
       {
         "command": "configDebt.assessImpact",
-        "title": "Configuration Debt: Assess Removal Impact",
+        "title": "Assess Removal Impact",
         "category": "Configuration Debt",
         "icon": "$(graph)"
       },
       {
         "command": "configDebt.testAiConnection",
-        "title": "Configuration Debt: Test AI Connection",
+        "title": "Test AI Connection",
         "category": "Configuration Debt",
         "icon": "$(plug)"
       },
       {
         "command": "configDebt.watchWorkspace",
-        "title": "Configuration Debt: Watch Workspace",
+        "title": "Watch Workspace",
         "category": "Configuration Debt",
         "icon": "$(eye)"
       },
       {
         "command": "configDebt.rebuildIndex",
-        "title": "Configuration Debt: Rebuild Code Index",
+        "title": "Rebuild Code Index",
         "category": "Configuration Debt",
         "icon": "$(database)"
       },
       {
         "command": "configDebt.showFindings",
-        "title": "Configuration Debt: Show Findings",
+        "title": "Show Findings",
         "category": "Configuration Debt",
         "icon": "$(list-unordered)"
       }
