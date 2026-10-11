@@ -17,9 +17,30 @@ export class OfflineAIProvider implements IAIProvider {
   async chat(messages: AIMessage[], _options?: AIRequestOptions): Promise<AIResponse> {
     const startTime = Date.now();
     const lastUserMsg = messages.filter((m) => m.role === 'user').pop()?.content || '';
-    const contextMsg = messages.find((m) => m.role === 'system')?.content || '';
 
-    const content = this.generateGroundedResponse(lastUserMsg, contextMsg);
+    // Extract evidence context and user query from formatted message
+    let userQuery = lastUserMsg;
+    let evidenceContext = '';
+
+    if (lastUserMsg.includes('RETRIEVED REPOSITORY EVIDENCE:')) {
+      const parts = lastUserMsg.split('----------------------------------------');
+      if (parts.length >= 3) {
+        evidenceContext = parts[1].trim();
+        const queryPart = parts.slice(2).join('----------------------------------------');
+        userQuery = queryPart.replace('USER QUERY:', '').trim();
+      }
+    }
+
+    if (!evidenceContext) {
+      // Fallback: search across all messages for evidence
+      for (const m of messages) {
+        if (m.content.includes('Static Source References:') || m.content.includes('Relevant Configuration Declarations:')) {
+          evidenceContext += '\n' + m.content;
+        }
+      }
+    }
+
+    const content = this.generateGroundedResponse(userQuery, evidenceContext);
 
     return {
       content,
@@ -30,31 +51,42 @@ export class OfflineAIProvider implements IAIProvider {
     };
   }
 
-  private generateGroundedResponse(userQuery: string, systemContext: string): string {
+  private generateGroundedResponse(userQuery: string, evidenceContext: string): string {
     const qLower = userQuery.toLowerCase();
 
-    // Check if query is about removal impact
+    // 1. Removal impact questions
     if (qLower.includes('remove') || qLower.includes('delete') || qLower.includes('break')) {
-      return this.formatRemovalImpactResponse(userQuery, systemContext);
+      return this.formatRemovalImpactResponse(userQuery, evidenceContext);
     }
 
-    // Check if query is where something is used
+    // 2. Usage location and dependency questions
     if (qLower.includes('where') || qLower.includes('used') || qLower.includes('depend')) {
-      return this.formatUsageLocationResponse(userQuery, systemContext);
+      return this.formatUsageLocationResponse(userQuery, evidenceContext);
     }
 
-    // Check if query is about drift or duplicates
-    if (qLower.includes('drift') || qLower.includes('duplicate')) {
-      return this.formatDriftResponse(systemContext);
+    // 3. Drift questions
+    if (qLower.includes('drift')) {
+      return this.formatDriftResponse(evidenceContext);
     }
 
-    // Check if query is about secrets
+    // 4. Secret / credential questions
     if (qLower.includes('secret') || qLower.includes('password') || qLower.includes('token')) {
-      return this.formatSecretResponse(systemContext);
+      return this.formatSecretResponse(evidenceContext);
     }
 
-    // Default grounded synthesis
-    return this.formatGeneralGroundedResponse(userQuery, systemContext);
+    // 5. Architecture or repository summary questions
+    if (
+      qLower.includes('architecture') ||
+      qLower.includes('overview') ||
+      qLower.includes('summarize') ||
+      qLower.includes('start') ||
+      qLower.includes('flow')
+    ) {
+      return this.formatArchitectureResponse(userQuery, evidenceContext);
+    }
+
+    // 6. General grounded code response
+    return this.formatGeneralGroundedResponse(userQuery, evidenceContext);
   }
 
   private formatRemovalImpactResponse(_query: string, context: string): string {
@@ -96,6 +128,7 @@ Do not delete this configuration without migrating or refactoring the active sou
 
   private formatUsageLocationResponse(_query: string, context: string): string {
     const refs = this.extractReferencesFromContext(context);
+    const configs = this.extractConfigsFromContext(context);
 
     if (refs.length === 0) {
       return `ANSWER
@@ -103,7 +136,7 @@ No static references were detected in the indexed repository source files.
 
 EVIDENCE
 - Static references count: 0
-- Scanned repository files indexed with multi-language AST intelligence.
+${configs.length > 0 ? configs.map((c) => `- Declared in ${c}`).join('\n') : '- Scanned repository files indexed with multi-language AST intelligence.'}
 
 CONFIDENCE
 96%
@@ -117,6 +150,7 @@ This configuration is actively referenced across ${refs.length} source location(
 
 EVIDENCE
 ${refs.map((r) => `- ${r}`).join('\n')}
+${configs.length > 0 ? '\nDeclarations:\n' + configs.map((c) => `- ${c}`).join('\n') : ''}
 
 CONFIDENCE
 98%
@@ -130,7 +164,7 @@ Ensure all consumers are updated together if modifying this configuration settin
 Configuration drift occurs when logical settings diverge in value across different configuration files or deployment environments.
 
 EVIDENCE
-${context.includes('CONFIGURATION DRIFT') ? '- Active value drift detected in repository index.' : '- Evaluated multi-file canonical declarations.'}
+${context.includes('CONFIGURATION DRIFT') || context.includes('Configuration drift') ? '- Active value drift detected in repository index.' : '- Evaluated multi-file canonical declarations.'}
 
 CONFIDENCE
 97%
@@ -155,18 +189,38 @@ RECOMMENDATION
 3. Inject the secret at runtime using a secrets manager or uncommitted local environment file.`;
   }
 
+  private formatArchitectureResponse(query: string, context: string): string {
+    const snippets = this.extractSnippetsFromContext(context);
+    return `ANSWER
+Repository architecture synthesis for query: "${query}".
+
+EVIDENCE
+${snippets.length > 0 ? snippets.map((s) => `- ${s}`).join('\n') : '- Indexed workspace source files, analyzers, and configuration items.'}
+
+CONFIDENCE
+92%
+
+RECOMMENDATION
+Inspect the cited modules and primary pipeline orchestrator to follow data flow from configuration scanning to health accounting.`;
+  }
+
   private formatGeneralGroundedResponse(query: string, context: string): string {
+    const lines = context
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith('Repository:') && !l.startsWith('Indexed at:') && !l.startsWith('Query:'));
+
     return `ANSWER
 Evaluated repository evidence for query: "${query}".
 
 EVIDENCE
-${context.slice(0, 300).split('\n').filter((l) => l.trim()).slice(0, 4).join('\n')}
+${lines.slice(0, 6).map((l) => (l.startsWith('-') ? l : `- ${l}`)).join('\n') || '- Analyzed repository index.'}
 
 CONFIDENCE
 90%
 
 RECOMMENDATION
-Address highest-risk items first to systematically restore repository configuration health.`;
+Consult cited files and symbols to review underlying implementation details.`;
   }
 
   private extractReferencesFromContext(context: string): string[] {
@@ -175,11 +229,11 @@ Address highest-risk items first to systematically restore repository configurat
     let inRefs = false;
 
     for (const l of lines) {
-      if (l.startsWith('Static Source References:')) {
+      if (l.includes('Static Source References')) {
         inRefs = true;
         continue;
       }
-      if (inRefs && l.startsWith('Configuration Debt Findings:')) {
+      if (inRefs && (l.includes('Retrieved Source Code Snippets:') || l.includes('Configuration Debt Findings:'))) {
         break;
       }
       if (inRefs && l.trim().startsWith('- ')) {
@@ -196,11 +250,11 @@ Address highest-risk items first to systematically restore repository configurat
     let inConfigs = false;
 
     for (const l of lines) {
-      if (l.startsWith('Relevant Configuration Declarations:')) {
+      if (l.includes('Relevant Configuration Declarations:')) {
         inConfigs = true;
         continue;
       }
-      if (inConfigs && l.startsWith('Static Source References:')) {
+      if (inConfigs && (l.includes('Static Source References') || l.includes('Configuration Debt Findings:'))) {
         break;
       }
       if (inConfigs && l.trim().startsWith('- ')) {
@@ -209,5 +263,16 @@ Address highest-risk items first to systematically restore repository configurat
     }
 
     return configs;
+  }
+
+  private extractSnippetsFromContext(context: string): string[] {
+    const snips: string[] = [];
+    const lines = context.split('\n');
+    for (const l of lines) {
+      if (l.startsWith('--- File:')) {
+        snips.push(l.replace(/---/g, '').trim());
+      }
+    }
+    return snips;
   }
 }

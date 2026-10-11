@@ -177,10 +177,19 @@ export class DashboardPanel {
       case 'askLlm':
         if (message.prompt) {
           const config = vscode.workspace.getConfiguration('configDebt');
-          const providerType = config.get<any>('aiProvider') || 'offline';
-          const model = config.get<string>('aiModel') || '';
+          let apiKey = '';
+          try {
+            apiKey = await (await import('../services/secretStorageService')).SecretStorageService.getInstance().getGeminiApiKey();
+          } catch {
+            apiKey = process.env.GEMINI_API_KEY || '';
+          }
+
+          let providerType = config.get<any>('aiProvider') || 'offline';
+          if (providerType === 'offline' && apiKey) {
+            providerType = 'gemini';
+          }
+          const model = config.get<string>('aiModel') || 'gemini-2.5-flash';
           const endpoint = config.get<string>('aiEndpoint') || '';
-          const apiKey = config.get<string>('geminiApiKey') || process.env.GEMINI_API_KEY || '';
 
           const answer = await this.aiExplainer.chatWithAssistant(
             message.prompt,

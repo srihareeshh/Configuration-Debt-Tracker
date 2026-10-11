@@ -81,16 +81,46 @@
         "icon": "$(comment-discussion)"
       },
       {
-        "command": "configDebt.askAssistant",
-        "title": "Configuration Debt: Ask Repository Assistant",
+        "command": "configDebt.openAiAssistant",
+        "title": "Configuration Debt: Open AI Assistant",
         "category": "Configuration Debt",
         "icon": "$(hubot)"
       },
       {
+        "command": "configDebt.setGeminiApiKey",
+        "title": "Configuration Debt: Set Gemini API Key",
+        "category": "Configuration Debt",
+        "icon": "$(key)"
+      },
+      {
+        "command": "configDebt.removeGeminiApiKey",
+        "title": "Configuration Debt: Remove Gemini API Key",
+        "category": "Configuration Debt",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "configDebt.testGeminiConnection",
+        "title": "Configuration Debt: Test Gemini Connection",
+        "category": "Configuration Debt",
+        "icon": "$(plug)"
+      },
+      {
         "command": "configDebt.explainSelection",
-        "title": "Configuration Debt: Explain Selection",
+        "title": "Configuration Debt: Explain Selection with AI",
         "category": "Configuration Debt",
         "icon": "$(search)"
+      },
+      {
+        "command": "configDebt.askAboutCurrentFile",
+        "title": "Configuration Debt: Ask About Current File",
+        "category": "Configuration Debt",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "configDebt.summarizeRepository",
+        "title": "Configuration Debt: Summarize Repository with AI",
+        "category": "Configuration Debt",
+        "icon": "$(book)"
       },
       {
         "command": "configDebt.assessImpact",
@@ -134,12 +164,21 @@
           "command": "configDebt.openDashboard",
           "when": "view == configDebt.sidebarView",
           "group": "navigation"
+        },
+        {
+          "command": "configDebt.openAiAssistant",
+          "when": "view == configDebt.sidebarView",
+          "group": "navigation"
         }
       ],
       "editor/context": [
         {
           "command": "configDebt.explainSelection",
           "when": "editorHasSelection",
+          "group": "ConfigurationDebt"
+        },
+        {
+          "command": "configDebt.askAboutCurrentFile",
           "group": "ConfigurationDebt"
         }
       ]
@@ -149,14 +188,19 @@
       "properties": {
         "configDebt.aiProvider": {
           "type": "string",
-          "enum": ["offline", "local", "gemini", "openai"],
-          "default": "offline",
-          "description": "Active AI intelligence provider. 'offline' is 100% deterministic and private."
+          "enum": [
+            "offline",
+            "gemini",
+            "local",
+            "openai"
+          ],
+          "default": "gemini",
+          "description": "Active AI intelligence provider. When Gemini is configured, it provides repository-grounded intelligence. 'offline' is 100% deterministic and private."
         },
         "configDebt.aiModel": {
           "type": "string",
-          "default": "llama3",
-          "description": "Model identifier for local (e.g. llama3) or cloud (e.g. gemini-1.5-flash, gpt-4o-mini) providers."
+          "default": "gemini-2.5-flash",
+          "description": "Model identifier for Google Gemini (e.g. gemini-2.5-flash, gemini-3.7-flash) or local (e.g. llama3) providers."
         },
         "configDebt.aiEndpoint": {
           "type": "string",
@@ -168,15 +212,10 @@
           "default": 25000,
           "description": "Timeout in milliseconds for AI requests."
         },
-        "configDebt.geminiApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "Optional Gemini API key for natural language explanations."
-        },
-        "configDebt.openaiApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "Optional OpenAI or custom endpoint API key."
+        "configDebt.aiAllowCloudContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow transmitting redacted repository code and context to the configured cloud AI provider (e.g. Google Gemini)."
         },
         "configDebt.staleAgeDaysThreshold": {
           "type": "number",
@@ -237,11 +276,12 @@
     "@types/mocha": "^10.0.6",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
-    "mocha": "^10.2.0",
+    "mocha": "^12.0.3",
     "typescript": "^5.3.3"
   },
   "dependencies": {
-    "fast-xml-parser": "^4.3.5",
+    "@google/genai": "^2.28.0",
+    "fast-xml-parser": "^5.11.2",
     "yaml": "^2.3.4"
   }
 }

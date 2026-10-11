@@ -1,13 +1,14 @@
 /**
  * Configuration Debt Tracker - Upgraded AI Explainer & Repository Intelligence
  * Bridges RepositoryIndex, RetrievalEngine, PromptBuilder, and AIProviderFactory.
- * Guarantees zero secret exposure, grounded citations, and 100% offline fallback.
+ * Guarantees zero secret exposure, grounded citations, multi-turn history, and clear failure reporting.
  */
 
 import { RepositoryIndex } from '../code-intelligence/index/repositoryIndex';
-import { RetrievalEngine } from '../code-intelligence/retrieval/retrievalEngine';
+import { RetrievalEngine, RetrievedEvidenceContext } from '../code-intelligence/retrieval/retrievalEngine';
 import { DebtFinding } from '../models/finding';
 import { ScanResult } from '../models/scan';
+import { AIMessage } from './aiProvider';
 import { AIProviderFactory, ProviderSettings } from './aiProviderFactory';
 import { PromptBuilder } from './promptBuilder';
 
@@ -26,6 +27,7 @@ export interface ConnectionTestResult {
   providerName: string;
   message: string;
   latencyMs?: number;
+  modelUsed?: string;
 }
 
 export class AiExplainer {
@@ -33,10 +35,23 @@ export class AiExplainer {
   private retrievalEngine: RetrievalEngine;
   private promptBuilder = new PromptBuilder();
   private providerFactory = new AIProviderFactory();
+  private sessionHistory: AIMessage[] = [];
 
   constructor(repositoryIndex?: RepositoryIndex) {
     this.repositoryIndex = repositoryIndex || new RepositoryIndex();
     this.retrievalEngine = new RetrievalEngine(this.repositoryIndex);
+  }
+
+  getRepositoryIndex(): RepositoryIndex {
+    return this.repositoryIndex;
+  }
+
+  getRetrievalEngine(): RetrievalEngine {
+    return this.retrievalEngine;
+  }
+
+  getProviderFactory(): AIProviderFactory {
+    return this.providerFactory;
   }
 
   updateRepositoryIndex(scanResult: ScanResult): void {
@@ -45,52 +60,76 @@ export class AiExplainer {
       scanResult.workspacePath,
       scanResult.items,
       scanResult.findings,
-      scanResult.usageMap
+      scanResult.usageMap,
+      scanResult.sourceFiles || new Map()
     );
   }
 
+  clearConversation(): void {
+    this.sessionHistory = [];
+  }
+
+  getSessionHistory(): AIMessage[] {
+    return [...this.sessionHistory];
+  }
+
   /**
-   * Tests connection to the configured AI provider
+   * Tests connection to the configured AI provider with actual live ping
    */
   async testConnection(settings: ProviderSettings): Promise<ConnectionTestResult> {
     const provider = this.providerFactory.resolveProvider(settings);
     const startTime = Date.now();
 
-    try {
-      if (provider.id === 'offline') {
-        return {
-          ok: true,
-          providerId: provider.id,
-          providerName: provider.name,
-          message: 'Offline deterministic reasoning engine is active and ready (no API key required).'
-        };
-      }
+    if (provider.id === 'offline') {
+      return {
+        ok: true,
+        providerId: provider.id,
+        providerName: provider.name,
+        message: 'Offline deterministic reasoning engine is active and ready (no API key required).',
+        latencyMs: 0
+      };
+    }
 
-      const available = await provider.isAvailable();
-      if (!available) {
+    if (provider.id === 'gemini') {
+      const hasKey = Boolean(settings.geminiApiKey || process.env.GEMINI_API_KEY);
+      if (!hasKey) {
+        this.providerFactory.setGeminiStatus('Gemini: Not configured');
         return {
           ok: false,
           providerId: provider.id,
           providerName: provider.name,
-          message: `Provider '${provider.name}' is currently unavailable or missing configuration.`
+          message: 'Gemini API key is not configured. Please run "Configuration Debt: Set Gemini API Key".'
         };
       }
+      this.providerFactory.setGeminiStatus('Gemini: Testing connection');
+    }
 
-      // Send lightweight ping
+    try {
+      // Send real lightweight ping to verify authentication and model responsiveness
       const resp = await provider.chat(
         [{ role: 'user', content: 'Ping. Respond with OK.' }],
-        { maxTokens: 10, timeoutMs: 5000 }
+        { maxTokens: 10, timeoutMs: settings.timeoutMs || 10000 }
       );
+
+      const latencyMs = resp.latencyMs || Date.now() - startTime;
+
+      if (provider.id === 'gemini') {
+        this.providerFactory.setGeminiStatus('Gemini: Connected');
+      }
 
       return {
         ok: true,
         providerId: provider.id,
         providerName: provider.name,
-        message: `Connected successfully to ${provider.name} (${resp.modelUsed}).`,
-        latencyMs: Date.now() - startTime
+        message: `Gemini connected successfully.\nModel: ${resp.modelUsed}\nLatency: ${latencyMs}ms`,
+        latencyMs,
+        modelUsed: resp.modelUsed
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (provider.id === 'gemini') {
+        this.providerFactory.setGeminiStatus('Gemini: Request failed');
+      }
       return {
         ok: false,
         providerId: provider.id,
@@ -102,36 +141,62 @@ export class AiExplainer {
   }
 
   /**
-   * Conversational assistant over indexed repository using targeted RAG retrieval
+   * Conversational assistant over indexed repository using targeted RAG retrieval and multi-turn context
    */
   async chatWithAssistant(
     userPrompt: string,
     scanResult: ScanResult | null,
-    settings: ProviderSettings = {}
+    settings: ProviderSettings = {},
+    allowCloudContext: boolean = true
   ): Promise<string> {
-    if (!scanResult) {
-      return 'No scan available. Please run a workspace scan first to analyze configurations and source code.';
+    if (!scanResult && !this.repositoryIndex.getIndex()) {
+      return 'The workspace has not been indexed yet. Please run "Configuration Debt: Scan Workspace" first to analyze repository configurations and source files.';
     }
 
-    this.updateRepositoryIndex(scanResult);
+    if (scanResult) {
+      this.updateRepositoryIndex(scanResult);
+    }
 
     // 1. Retrieve compact, redacted evidence context
-    const context = this.retrievalEngine.retrieveContext(userPrompt);
+    let context: RetrievedEvidenceContext = this.retrievalEngine.retrieveContext(userPrompt);
 
-    // 2. Build grounded prompt
-    const messages = this.promptBuilder.buildGroundedMessages(context, userPrompt);
+    // 2. Enforce cloud context consent policy
+    const isCloudProvider = (settings.providerType || 'offline') === 'gemini';
+    if (isCloudProvider && !allowCloudContext) {
+      return 'Cloud repository context transmission is disabled (configDebt.aiAllowCloudContext is false). Enable this setting or switch configDebt.aiProvider to "offline" in Settings.';
+    }
 
-    // 3. Resolve active provider
+    // 3. Build grounded multi-turn messages
+    const messages = this.promptBuilder.buildConversationMessages(
+      context,
+      this.sessionHistory,
+      userPrompt
+    );
+
+    // 4. Resolve active provider
     const provider = this.providerFactory.resolveProvider(settings);
 
     try {
       const response = await provider.chat(messages, { timeoutMs: settings.timeoutMs || 25000 });
-      return response.content.trim();
-    } catch {
-      // Graceful fallback to offline deterministic engine
-      const offline = this.providerFactory.getOfflineProvider();
-      const fallbackResp = await offline.chat(messages);
-      return `[Offline Fallback Mode]\n${fallbackResp.content}`;
+      const answer = response.content.trim();
+
+      // Record turn to session history
+      this.sessionHistory.push({ role: 'user', content: userPrompt });
+      this.sessionHistory.push({ role: 'assistant', content: answer });
+
+      if (provider.id === 'gemini') {
+        this.providerFactory.setGeminiStatus('Gemini: Connected');
+      }
+
+      return answer;
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (provider.id === 'gemini') {
+        this.providerFactory.setGeminiStatus('Gemini: Request failed');
+      }
+
+      // DO NOT silently switch to offline mode. Provide explicit error and guidance.
+      return `[${provider.name} Request Error]\n${errorMsg}\n\nTip: You can retry, check your API key, or switch active provider to 'offline' in Settings.`;
     }
   }
 
@@ -142,105 +207,91 @@ export class AiExplainer {
     finding: DebtFinding,
     settings: ProviderSettings = {}
   ): Promise<ExplanationResponse> {
-    const item = finding.configurationItem;
     const offlineResp = this.generateDeterministicExplanation(finding);
-
     const provider = this.providerFactory.resolveProvider(settings);
+
     if (provider.id !== 'offline') {
       try {
-        const prompt = `Explain configuration finding:
-- Key: ${item.key}
-- Category: ${finding.categoryLabel}
-- Risk: ${finding.riskScore}/100 (${finding.severity.toUpperCase()})
-- Location: ${item.filePath}:${item.line}
-- Evidence: ${finding.evidence.join(' ')}`;
+        const item = finding.configurationItem;
+        const findingSummary = `Finding Title: ${finding.title}
+Key: ${item.key}
+Location: ${item.filePath}:${item.line}
+Format: ${item.format}
+Severity: ${finding.severity} (Risk Score: ${finding.riskScore}/100)
+Evidence: ${finding.evidence.join(' ')}
+Suggested Action: ${finding.suggestedAction}`;
 
-        const msgs = this.promptBuilder.buildFindingExplanationMessages(prompt);
-        const resp = await provider.chat(msgs, { maxTokens: 500, timeoutMs: 15000 });
+        const messages = this.promptBuilder.buildFindingExplanationMessages(findingSummary);
+        const resp = await provider.chat(messages, { timeoutMs: settings.timeoutMs || 15000 });
 
         return {
-          summary: `${finding.title}`,
-          whyFlagged: resp.content,
-          evidenceExplanation: finding.evidence.join(' '),
+          summary: resp.content.trim(),
+          whyFlagged: offlineResp.whyFlagged,
+          evidenceExplanation: offlineResp.evidenceExplanation,
           verificationSteps: offlineResp.verificationSteps,
-          remediationAdvice: finding.recommendation,
-          provider: provider.name
+          remediationAdvice: offlineResp.remediationAdvice,
+          provider: `${provider.name} (${resp.modelUsed})`
         };
       } catch {
-        // Fall back to deterministic explanation
+        // Return offline explanation if cloud fails
+        return offlineResp;
       }
     }
 
     return offlineResp;
   }
 
-  /**
-   * Deterministic explanation generator operating 100% offline
-   */
-  generateDeterministicExplanation(finding: DebtFinding): ExplanationResponse {
+  private generateDeterministicExplanation(finding: DebtFinding): ExplanationResponse {
     const item = finding.configurationItem;
-    const cat = finding.category;
-
-    let summary = '';
+    let summary = `Configuration '${item.key}' in '${item.filePath}:${item.line}' was identified with ${finding.severity.toUpperCase()} debt (Risk: ${finding.riskScore}/100).`;
     let whyFlagged = '';
     let evidenceExplanation = finding.evidence.join(' ');
-    let verificationSteps: string[] = [];
-    let remediationAdvice = finding.recommendation;
+    const verificationSteps: string[] = [];
+    let remediationAdvice = finding.suggestedAction;
 
-    switch (cat) {
-      case 'dead_configuration':
-        summary = `Configuration setting '${item.key}' in '${item.filePath}' appears to be dead code that is no longer referenced anywhere in the repository.`;
-        whyFlagged = `The static analysis engine scanned all source files across JavaScript, TypeScript, Python, Java, Go, Rust, and C# and found zero direct or framework references to '${item.key}'.`;
-        verificationSteps = [
-          `Search git history to verify when '${item.key}' was introduced and which component required it.`,
-          `Check whether '${item.key}' is injected dynamically in external CI/CD or Helm manifests outside this repo.`,
-          `Test a staging build with '${item.key}' commented out to confirm no runtime reflection fails.`
-        ];
-        break;
-
-      case 'configuration_drift':
-        summary = `Configuration setting '${item.key}' exhibits active value drift across multiple configuration files.`;
-        whyFlagged = `Multiple files define '${item.key}' with divergent values. Environments using different configuration files will experience conflicting behavior.`;
-        verificationSteps = [
-          `Compare the distinct values defined across the affected files (${finding.affectedFiles.join(', ')}).`,
-          `Determine which file serves as the canonical source of truth for each target environment.`
-        ];
-        break;
-
-      case 'duplicated_configuration':
-        summary = `The configuration key '${item.key}' is declared across multiple files (${finding.affectedFiles.join(', ')}).`;
-        whyFlagged = `Identical configuration settings exist in multiple files. If one file is updated during maintenance while another is overlooked, configuration drift will occur.`;
-        verificationSteps = [
-          `Check whether duplicate declarations in ${finding.affectedFiles.join(', ')} can be consolidated into a single root file or container env injection.`
-        ];
-        break;
-
+    switch (finding.category) {
       case 'hardcoded_secret':
         summary = `A sensitive credential or API key was detected in plaintext in '${item.filePath}:${item.line}'.`;
-        whyFlagged = `The secret detection engine matched a known credential pattern or high-entropy literal. Committing plaintext secrets into repository files exposes infrastructure to unauthorized access.`;
-        verificationSteps = [
-          `Check immediately whether '${item.key}' represents an active production credential or a local test dummy.`,
-          `If this is a real secret, revoke and rotate the credential immediately in your provider dashboard.`,
-          `Verify that your repository's .gitignore properly excludes local '.env' files.`
-        ];
+        whyFlagged =
+          'The secret detection engine matched a known credential pattern or high-entropy literal. Committing plaintext secrets into repository files exposes infrastructure to unauthorized access.';
+        verificationSteps.push(
+          `Check immediately whether '${item.key}' represents an active production credential or a local test dummy.`
+        );
+        verificationSteps.push(
+          'If this is a real secret, revoke and rotate the credential immediately in your provider dashboard.'
+        );
+        verificationSteps.push(
+          "Verify that your repository's .gitignore properly excludes local '.env' files."
+        );
         remediationAdvice = `1. Rotate the compromised credential.\n2. Move the value into an external secret store or uncommitted .env file.\n3. Replace the plaintext value with a runtime environment variable reference.`;
         break;
 
-      case 'unused_feature_flag':
-        summary = `Feature flag '${item.key}' in '${item.filePath}' is declared but not referenced anywhere in code.`;
-        whyFlagged = `The key matches feature flag naming conventions but has 0 active usages or conditional branches in the indexed source code.`;
-        verificationSteps = [
-          `Confirm whether the feature was fully shipped or discontinued.`,
-          `Remove the dormant configuration flag to reduce cognitive debt.`
-        ];
+      case 'dead_configuration':
+        summary = `The configuration key '${item.key}' in '${item.filePath}:${item.line}' appears to be dead code (zero static references).`;
+        whyFlagged =
+          'Static analysis scanned all workspace files and found zero code expressions referencing this setting.';
+        verificationSteps.push(
+          `Search your codebase for dynamic references, e.g. process.env["${item.key}"] or reflection.`
+        );
+        verificationSteps.push(
+          'Check CI/CD workflows and deployment configurations (Kubernetes, Helm, Docker) that might consume this setting externally.'
+        );
+        verificationSteps.push(
+          'Confirm with the engineering team if this setting was recently decommissioned.'
+        );
+        break;
+
+      case 'configuration_drift':
+        summary = `Configuration '${item.key}' exhibits value drift across multiple files in the repository.`;
+        whyFlagged =
+          'The same logical configuration key is defined with divergent values across different files.';
+        verificationSteps.push('Compare all defined instances of this key across environments.');
+        verificationSteps.push('Determine which configuration file represents the authoritative source of truth.');
         break;
 
       default:
-        summary = `Configuration debt item: ${finding.title}`;
-        whyFlagged = finding.evidence.join(' ');
-        verificationSteps = [
-          `Review the setting in '${item.filePath}:${item.line}' against its active consumers.`
-        ];
+        whyFlagged = `Flagged under category '${finding.categoryLabel}'. ${finding.suggestedAction}`;
+        verificationSteps.push('Verify configuration usage in current workspace.');
         break;
     }
 
@@ -252,9 +303,5 @@ export class AiExplainer {
       remediationAdvice,
       provider: 'Deterministic Offline Engine'
     };
-  }
-
-  getRetrievalEngine(): RetrievalEngine {
-    return this.retrievalEngine;
   }
 }

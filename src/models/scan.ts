@@ -85,6 +85,8 @@ export interface ImpactAnalysisResult {
   removalAdvisory: string;
 }
 
+import { IndexedSourceFile } from '../code-intelligence/ast/astIndexer';
+
 export interface ScanResult {
   scanId: string;
   workspaceName: string;
@@ -98,4 +100,5 @@ export interface ScanResult {
   cleanupItems: CleanupItem[];
   scanDurationMs: number;
   errors: { file: string; message: string }[];
+  sourceFiles?: Map<string, IndexedSourceFile>;
 }

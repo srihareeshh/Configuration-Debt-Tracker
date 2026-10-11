@@ -3,12 +3,15 @@
  * Registers SCM diagnostic views, commands, assistant interactions, and watcher.
  */
 
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { AiExplainer } from './ai/aiExplainer';
 import { ImpactAnalyzer } from './core/impact/impactAnalyzer';
 import { ScanResult } from './models/scan';
 import { HistoryService } from './services/historyService';
 import { ScanService } from './services/scanService';
+import { SecretStorageService } from './services/secretStorageService';
+import { AssistantPanel } from './ui/assistantPanel';
 import { DashboardPanel } from './ui/dashboardPanel';
 import { SidebarProvider } from './ui/sidebarProvider';
 
@@ -17,6 +20,21 @@ let watcherDisposable: vscode.Disposable | null = null;
 let watchDebounceTimer: NodeJS.Timeout | null = null;
 
 export function activate(context: vscode.ExtensionContext): void {
+  // Initialize secure API key storage service
+  const secretService = SecretStorageService.initialize(context.secrets);
+
+  // Migrate legacy plaintext setting if user previously entered it in settings
+  const config = vscode.workspace.getConfiguration('configDebt');
+  const legacyKey = config.get<string>('geminiApiKey');
+  if (legacyKey && legacyKey.trim()) {
+    secretService.setGeminiApiKey(legacyKey.trim()).then(() => {
+      config.update('geminiApiKey', undefined, vscode.ConfigurationTarget.Global);
+      vscode.window.showInformationMessage(
+        'Configuration Debt: Migrated Gemini API key to encrypted SecretStorage.'
+      );
+    });
+  }
+
   const scanService = new ScanService();
   const aiExplainer = new AiExplainer();
   const impactAnalyzer = new ImpactAnalyzer();
@@ -50,8 +68,8 @@ export function activate(context: vscode.ExtensionContext): void {
         async (progress) => {
           progress.report({ message: 'Initiating workspace scan...' });
 
-          const config = vscode.workspace.getConfiguration('configDebt');
-          const excludes = config.get<string[]>('excludePatterns') || [];
+          const currentConfig = vscode.workspace.getConfiguration('configDebt');
+          const excludes = currentConfig.get<string[]>('excludePatterns') || [];
 
           try {
             const result = await scanService.runScan(
@@ -71,6 +89,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
             if (DashboardPanel.currentPanel) {
               DashboardPanel.currentPanel.setResult(result);
+            }
+            if (AssistantPanel.currentPanel) {
+              AssistantPanel.currentPanel.setResult(result);
             }
 
             vscode.window.showInformationMessage(
@@ -95,7 +116,193 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(dashboardCommand);
 
-  // 3. Command: Show Cleanup Backlog
+  // 3. Command: Open AI Assistant
+  const openAssistantCommand = vscode.commands.registerCommand(
+    'configDebt.openAiAssistant',
+    () => {
+      AssistantPanel.createOrShow(context.extensionUri, aiExplainer, lastScanResult);
+    }
+  );
+  context.subscriptions.push(openAssistantCommand);
+
+  // Alias for backward compatibility: askAssistant -> openAiAssistant
+  const askAssistantAlias = vscode.commands.registerCommand(
+    'configDebt.askAssistant',
+    () => {
+      AssistantPanel.createOrShow(context.extensionUri, aiExplainer, lastScanResult);
+    }
+  );
+  context.subscriptions.push(askAssistantAlias);
+
+  // 4. Command: Set Gemini API Key
+  const setApiKeyCommand = vscode.commands.registerCommand(
+    'configDebt.setGeminiApiKey',
+    async () => {
+      const apiKey = await vscode.window.showInputBox({
+        prompt: 'Enter your Google Gemini API key (stored encrypted in VS Code SecretStorage)',
+        password: true,
+        ignoreFocusOut: true,
+        placeHolder: 'AIzaSy...'
+      });
+
+      if (!apiKey || !apiKey.trim()) {
+        vscode.window.showWarningMessage('No API key entered. Operation cancelled.');
+        return;
+      }
+
+      await secretService.setGeminiApiKey(apiKey);
+      vscode.window.showInformationMessage(
+        'Configuration Debt: Gemini API key stored securely in encrypted SecretStorage.'
+      );
+
+      // Offer to test connection immediately
+      const testNow = await vscode.window.showInformationMessage(
+        'Would you like to test the Gemini connection now?',
+        'Test Connection',
+        'Later'
+      );
+      if (testNow === 'Test Connection') {
+        await vscode.commands.executeCommand('configDebt.testGeminiConnection');
+      }
+    }
+  );
+  context.subscriptions.push(setApiKeyCommand);
+
+  // 5. Command: Remove Gemini API Key
+  const removeApiKeyCommand = vscode.commands.registerCommand(
+    'configDebt.removeGeminiApiKey',
+    async () => {
+      await secretService.removeGeminiApiKey();
+      vscode.window.showInformationMessage(
+        'Configuration Debt: Gemini API key removed from SecretStorage.'
+      );
+    }
+  );
+  context.subscriptions.push(removeApiKeyCommand);
+
+  // 6. Command: Test Gemini Connection
+  const testGeminiCommand = vscode.commands.registerCommand(
+    'configDebt.testGeminiConnection',
+    async () => {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'Configuration Debt: Testing Gemini connection...',
+          cancellable: false
+        },
+        async () => {
+          const secretKey = await secretService.getGeminiApiKey();
+          const currentConfig = vscode.workspace.getConfiguration('configDebt');
+          const model = currentConfig.get<string>('aiModel') || 'gemini-2.5-flash';
+          const timeoutMs = currentConfig.get<number>('aiTimeout') || 25000;
+
+          if (!secretKey && !process.env.GEMINI_API_KEY) {
+            const setKeyChoice = await vscode.window.showWarningMessage(
+              'Gemini API key is not configured. Please set your key first.',
+              'Set Gemini API Key'
+            );
+            if (setKeyChoice === 'Set Gemini API Key') {
+              await vscode.commands.executeCommand('configDebt.setGeminiApiKey');
+            }
+            return;
+          }
+
+          const result = await aiExplainer.testConnection({
+            providerType: 'gemini',
+            model,
+            geminiApiKey: secretKey || process.env.GEMINI_API_KEY,
+            timeoutMs
+          });
+
+          if (result.ok) {
+            vscode.window.showInformationMessage(result.message);
+          } else {
+            vscode.window.showErrorMessage(result.message);
+          }
+        }
+      );
+    }
+  );
+  context.subscriptions.push(testGeminiCommand);
+
+  // Alias for backward compatibility: testAiConnection -> testGeminiConnection
+  const testAiAlias = vscode.commands.registerCommand(
+    'configDebt.testAiConnection',
+    async () => {
+      await vscode.commands.executeCommand('configDebt.testGeminiConnection');
+    }
+  );
+  context.subscriptions.push(testAiAlias);
+
+  // 7. Command: Explain Selection with AI
+  const explainSelectionCommand = vscode.commands.registerCommand(
+    'configDebt.explainSelection',
+    async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showWarningMessage('Open a source file to explain highlighted code.');
+        return;
+      }
+
+      const selectedText = editor.document.getText(editor.selection);
+      if (!selectedText.trim()) {
+        vscode.window.showInformationMessage('Please highlight a code or configuration expression.');
+        return;
+      }
+
+      const doc = editor.document;
+      const relPath = vscode.workspace.asRelativePath(doc.uri);
+      const lineNum = editor.selection.start.line + 1;
+
+      const query = `Explain this highlighted selection from ${relPath}:${lineNum}:\n\`\`\`${doc.languageId}\n${selectedText.trim()}\n\`\`\`\nWhat configuration or architecture does it touch, and does it carry configuration debt?`;
+
+      const panel = AssistantPanel.createOrShow(context.extensionUri, aiExplainer, lastScanResult);
+      await panel.askQuestionFromExternal(query);
+    }
+  );
+  context.subscriptions.push(explainSelectionCommand);
+
+  // 8. Command: Ask About Current File
+  const askCurrentFileCommand = vscode.commands.registerCommand(
+    'configDebt.askAboutCurrentFile',
+    async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showWarningMessage('No active file open in editor.');
+        return;
+      }
+
+      const doc = editor.document;
+      const relPath = vscode.workspace.asRelativePath(doc.uri);
+      const fileName = path.basename(relPath);
+
+      const userQuestion = await vscode.window.showInputBox({
+        prompt: `Ask a question about ${fileName}`,
+        placeHolder: `e.g. Explain the role of ${fileName} in this project`
+      });
+
+      if (!userQuestion || !userQuestion.trim()) return;
+
+      const query = `${userQuestion.trim()}\n\n[Focus File: ${relPath}]`;
+      const panel = AssistantPanel.createOrShow(context.extensionUri, aiExplainer, lastScanResult);
+      await panel.askQuestionFromExternal(query);
+    }
+  );
+  context.subscriptions.push(askCurrentFileCommand);
+
+  // 9. Command: Summarize Repository with AI
+  const summarizeRepoCommand = vscode.commands.registerCommand(
+    'configDebt.summarizeRepository',
+    async () => {
+      const panel = AssistantPanel.createOrShow(context.extensionUri, aiExplainer, lastScanResult);
+      const query =
+        'Summarize the entire repository for a developer who is new to it. Explain its core architecture, primary modules, and configuration posture.';
+      await panel.askQuestionFromExternal(query);
+    }
+  );
+  context.subscriptions.push(summarizeRepoCommand);
+
+  // 10. Command: Show Cleanup Backlog
   const backlogCommand = vscode.commands.registerCommand(
     'configDebt.showBacklog',
     () => {
@@ -105,7 +312,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(backlogCommand);
 
-  // 4. Command: Show Findings
+  // 11. Command: Show Findings
   const showFindingsCommand = vscode.commands.registerCommand(
     'configDebt.showFindings',
     async () => {
@@ -138,7 +345,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(showFindingsCommand);
 
-  // 5. Command: Refresh Analysis
+  // 12. Command: Refresh Analysis
   const refreshCommand = vscode.commands.registerCommand(
     'configDebt.refreshAnalysis',
     async () => {
@@ -147,7 +354,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(refreshCommand);
 
-  // 6. Command: Clear History
+  // 13. Command: Clear History
   const clearHistoryCommand = vscode.commands.registerCommand(
     'configDebt.clearHistory',
     async () => {
@@ -164,7 +371,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(clearHistoryCommand);
 
-  // 7. Command: Explain Finding
+  // 14. Command: Explain Finding
   const explainCommand = vscode.commands.registerCommand(
     'configDebt.explainFinding',
     async () => {
@@ -184,10 +391,11 @@ export function activate(context: vscode.ExtensionContext): void {
       });
 
       if (selection) {
-        const config = vscode.workspace.getConfiguration('configDebt');
+        const secretKey = await secretService.getGeminiApiKey();
+        const currentConfig = vscode.workspace.getConfiguration('configDebt');
         const explanation = await aiExplainer.explainFinding(selection.finding, {
-          providerType: config.get<any>('aiProvider') || 'offline',
-          geminiApiKey: config.get<string>('geminiApiKey')
+          providerType: currentConfig.get<any>('aiProvider') || (secretKey ? 'gemini' : 'offline'),
+          geminiApiKey: secretKey || process.env.GEMINI_API_KEY
         });
 
         vscode.window.showInformationMessage(
@@ -198,72 +406,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(explainCommand);
 
-  // 8. Command: Ask Repository Assistant
-  const askAssistantCommand = vscode.commands.registerCommand(
-    'configDebt.askAssistant',
-    async () => {
-      if (!lastScanResult) {
-        vscode.window.showWarningMessage('Please run a workspace scan first to index configurations.');
-        return;
-      }
-
-      const query = await vscode.window.showInputBox({
-        prompt: 'Ask the repository assistant about configuration usage, drift, or risk',
-        placeHolder: 'e.g. Where is DATABASE_URL used? Or: What breaks if I delete OLD_API_URL?'
-      });
-
-      if (query) {
-        const config = vscode.workspace.getConfiguration('configDebt');
-        const answer = await aiExplainer.chatWithAssistant(query, lastScanResult, {
-          providerType: config.get<any>('aiProvider') || 'offline',
-          geminiApiKey: config.get<string>('geminiApiKey'),
-          model: config.get<string>('aiModel'),
-          endpoint: config.get<string>('aiEndpoint')
-        });
-
-        const panel = vscode.window.createWebviewPanel(
-          'configDebtAssistantResponse',
-          `AI: ${query.slice(0, 30)}...`,
-          vscode.ViewColumn.Beside,
-          {}
-        );
-        panel.webview.html = `<html><body style="font-family:sans-serif; padding:16px; line-height:1.6; white-space:pre-wrap; background:var(--vscode-editor-background); color:var(--vscode-editor-foreground);"><h2>Query: ${query}</h2><hr/><p>${answer}</p></body></html>`;
-      }
-    }
-  );
-  context.subscriptions.push(askAssistantCommand);
-
-  // 9. Command: Explain Selection
-  const explainSelectionCommand = vscode.commands.registerCommand(
-    'configDebt.explainSelection',
-    async () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) return;
-
-      const selectedText = editor.document.getText(editor.selection);
-      if (!selectedText.trim()) {
-        vscode.window.showInformationMessage('Please highlight a configuration access expression in your code.');
-        return;
-      }
-
-      if (!lastScanResult) {
-        vscode.window.showWarningMessage('Run a workspace scan first to index configuration settings.');
-        return;
-      }
-
-      const prompt = `Explain highlighted code selection: "${selectedText.trim()}". What configuration is accessed, where is it declared, and does it carry configuration debt?`;
-      const config = vscode.workspace.getConfiguration('configDebt');
-      const answer = await aiExplainer.chatWithAssistant(prompt, lastScanResult, {
-        providerType: config.get<any>('aiProvider') || 'offline',
-        geminiApiKey: config.get<string>('geminiApiKey')
-      });
-
-      vscode.window.showInformationMessage(answer, 'OK');
-    }
-  );
-  context.subscriptions.push(explainSelectionCommand);
-
-  // 10. Command: Assess Removal Impact
+  // 15. Command: Assess Removal Impact
   const assessImpactCommand = vscode.commands.registerCommand(
     'configDebt.assessImpact',
     async () => {
@@ -302,29 +445,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(assessImpactCommand);
 
-  // 11. Command: Test AI Connection
-  const testAiCommand = vscode.commands.registerCommand(
-    'configDebt.testAiConnection',
-    async () => {
-      const config = vscode.workspace.getConfiguration('configDebt');
-      const settings = {
-        providerType: config.get<any>('aiProvider') || 'offline',
-        model: config.get<string>('aiModel'),
-        endpoint: config.get<string>('aiEndpoint'),
-        geminiApiKey: config.get<string>('geminiApiKey')
-      };
-
-      const testResult = await aiExplainer.testConnection(settings);
-      if (testResult.ok) {
-        vscode.window.showInformationMessage(`AI Status: ${testResult.message}`);
-      } else {
-        vscode.window.showWarningMessage(`AI Status: ${testResult.message}`);
-      }
-    }
-  );
-  context.subscriptions.push(testAiCommand);
-
-  // 12. Command: Rebuild Code Index
+  // 16. Command: Rebuild Code Index
   const rebuildIndexCommand = vscode.commands.registerCommand(
     'configDebt.rebuildIndex',
     async () => {
@@ -333,7 +454,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(rebuildIndexCommand);
 
-  // 13. Command: Watch Workspace
+  // 17. Command: Watch Workspace
   const watchCommand = vscode.commands.registerCommand(
     'configDebt.watchWorkspace',
     () => {
@@ -356,7 +477,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
         watcherDisposable = watcher;
         context.subscriptions.push(watcher);
-        vscode.window.showInformationMessage('Configuration Debt: Watch mode active (auto-refreshing on file changes).');
+        vscode.window.showInformationMessage(
+          'Configuration Debt: Watch mode active (auto-refreshing on file changes).'
+        );
       }
     }
   );

@@ -112,7 +112,8 @@ export class ScanService {
       usageMap,
       cleanupItems,
       scanDurationMs,
-      errors: scanRes.errors
+      errors: scanRes.errors,
+      sourceFiles: this.usageAnalyzer.getIndexedSourceFiles()
     };
 
     // Stage 6: Record history

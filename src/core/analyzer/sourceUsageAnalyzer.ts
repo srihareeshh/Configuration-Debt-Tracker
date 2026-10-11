@@ -5,6 +5,7 @@
  */
 
 import * as fs from 'fs';
+import { AstIndexer, IndexedSourceFile } from '../../code-intelligence/ast/astIndexer';
 import { ReferenceResolver } from '../../code-intelligence/references/referenceResolver';
 import { ConfigurationItem } from '../../models/configuration';
 import { UsageAnalysis } from '../../models/usage';
@@ -16,6 +17,8 @@ export interface AnalyzerProgressCallback {
 
 export class SourceUsageAnalyzer {
   private referenceResolver: ReferenceResolver;
+  private astIndexer = new AstIndexer();
+  private lastIndexedSourceFiles = new Map<string, IndexedSourceFile>();
 
   constructor(referenceResolver: ReferenceResolver = new ReferenceResolver()) {
     this.referenceResolver = referenceResolver;
@@ -30,6 +33,7 @@ export class SourceUsageAnalyzer {
     onProgress?: AnalyzerProgressCallback
   ): Promise<Record<string, UsageAnalysis>> {
     const usageMap: Record<string, UsageAnalysis> = {};
+    this.lastIndexedSourceFiles.clear();
 
     // 1. Identify source code files (strictly exclude pure config files, dotfiles, binaries, images)
     const sourceFiles = allFiles.filter((f) => {
@@ -60,12 +64,15 @@ export class SourceUsageAnalyzer {
       return ext.length > 0;
     });
 
-    // 2. Pre-read source files in memory for fast scanning
+    // 2. Pre-read and index source files in memory for fast scanning
     const fileContents = new Map<string, string>();
     for (const file of sourceFiles) {
       try {
         const content = await fs.promises.readFile(file.absolutePath, 'utf-8');
         fileContents.set(file.relativePath, content);
+        const language = this.detectLanguageFromExt(file.extension);
+        const indexed = this.astIndexer.indexSource(content, file.relativePath, language);
+        this.lastIndexedSourceFiles.set(file.relativePath, indexed);
       } catch {
         // Skip unreadable files
       }
@@ -85,6 +92,40 @@ export class SourceUsageAnalyzer {
     }
 
     return usageMap;
+  }
+
+  getIndexedSourceFiles(): Map<string, IndexedSourceFile> {
+    return this.lastIndexedSourceFiles;
+  }
+
+  private detectLanguageFromExt(ext: string): string {
+    const clean = ext.toLowerCase().replace(/^\./, '');
+    switch (clean) {
+      case 'ts':
+      case 'tsx':
+        return 'typescript';
+      case 'js':
+      case 'jsx':
+      case 'mjs':
+      case 'cjs':
+        return 'javascript';
+      case 'py':
+        return 'python';
+      case 'java':
+        return 'java';
+      case 'go':
+        return 'go';
+      case 'rs':
+        return 'rust';
+      case 'cs':
+        return 'csharp';
+      case 'sh':
+      case 'bash':
+      case 'zsh':
+        return 'shell';
+      default:
+        return clean || 'text';
+    }
   }
 
   getReferenceResolver(): ReferenceResolver {

@@ -6,3 +6,8 @@ out/
 .DS_Store
 Thumbs.db
 .vscode-test/
+.env
+.env.*
+*.env
+*.secret
+credentials.json

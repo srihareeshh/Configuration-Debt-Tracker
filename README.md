@@ -31,6 +31,7 @@
 17. [Verification & Test Matrix](#17-verification--test-matrix)
 18. [Live Demonstration Guide](#18-live-demonstration-guide)
 19. [Academic SCM Defense & Defense Criteria](#19-academic-scm-defense--defense-criteria)
+20. [Gemini AI Assistant: Complete Guide & Operations](#20-gemini-ai-assistant-complete-guide--operations)
 
 ---
 
@@ -220,11 +221,15 @@ Inventory statistics are derived mathematically from configuration declarations 
 
 Layer B features a custom **Retrieval-Augmented Generation (RAG) Engine** (`src/code-intelligence/retrieval/retrievalEngine.ts`) built over the in-memory `RepositoryIndex`:
 
-1. **Query Parsing**: Extracts mentioned configuration keys, symbols, and topics.
-2. **Targeted Evidence Retrieval**: Retrieves configuration declarations, line numbers, enclosing code symbols, static source references, and findings.
-3. **Context Construction**: Assembles a compact, targeted context block containing only relevant evidence.
-4. **Zero-Hallucination Prompting**: Instructs the model to answer exclusively from evidence. If facts are absent, it replies: *"I could not verify this from the indexed repository."*
-5. **Clickable Citations**: All citations (e.g., `src/db.ts:12`) are clickable in the VS Code UI.
+1. **Dual-Mode Query Parsing**: Distinguishes between configuration queries (e.g. *"Where is DATABASE_URL used?"*) and general source-code questions (e.g. *"How does the scanner work?"*, *"Explain the health score calculation"*).
+2. **Targeted Evidence Retrieval**:
+   - **Configuration Intelligence**: Canonicalizes keys (`api.timeout` $\leftrightarrow$ `API_TIMEOUT`), looks up declarations across all formats, and gathers static references with confidence ratings.
+   - **General Code Intelligence (BM25 Lexical Ranking)**: Scans indexed source files, functions, classes, and imports. Tokenizes queries with stop-word filtering, term-frequency scoring, and length normalization.
+   - **AST Symbol Resolution**: Locates classes, methods, and interfaces with exact definition line ranges.
+   - **Documentation Grounding**: Indexes `README.md` sections for high-level architectural queries.
+3. **Structured Context Construction (`PromptBuilder`)**: Compiles retrieved evidence into an evidence block with exact `file:line` citations. Informs the model if evidence is incomplete.
+4. **Strict Zero-Hallucination System Prompting**: Instructs the model to rely strictly on repository evidence, distinguish facts from inference, and explicitly state when evidence is missing.
+5. **Interactive Clickable Citations**: All `path/to/file:line` citations in the assistant webview are clickable. Clicking navigates to the validated workspace file and centers the cursor on the exact line.
 
 ---
 
@@ -268,17 +273,27 @@ export interface IAIProvider {
 ```
 
 ### Supported Providers
-1. **Local Provider**: Connects to locally running models (Ollama, LM Studio, LocalAI) via OpenAI-compatible endpoints (`http://localhost:11434/v1`).
-2. **Gemini Provider**: Google Gemini API via official REST integration.
-3. **OpenAI-Compatible Provider**: Supports custom endpoints and cloud providers.
-4. **Deterministic Offline Fallback**: Fully functional without any external LLM or network connection.
+1. **Google Gemini (Primary Cloud Provider)**:
+   - Connects to Google's official Gemini API using the official `@google/genai` SDK.
+   - Default high-performance model: `gemini-2.5-flash` (configurable via `configDebt.aiModel`).
+   - Secure authentication via VS Code `SecretStorage` (`configurationDebtTracker.geminiApiKey`).
+   - Zero credentials in query strings, settings files, webviews, or git.
+2. **Deterministic Offline Engine**:
+   - Fully autonomous, rule-grounded reasoning engine requiring zero network connectivity and zero API keys.
+   - Guaranteed deterministic explanations and removal impact assessments.
+3. **Local Provider**:
+   - Connects to locally hosted models (Ollama, LM Studio, vLLM) via standard local endpoints (`http://localhost:11434/v1`).
+4. **OpenAI-Compatible Provider**:
+   - Supports self-hosted or proxy gateways conforming to the chat completions API standard.
 
 ### AI Safety & Zero Secret Leakage
 Before any context is transmitted to an LLM:
-- Passwords, tokens, credentials in URLs, and private keys are redacted using `PromptBuilder.redactSensitiveData()`:
-  `DATABASE_PASSWORD=<REDACTED>`
-  `API_KEY=<REDACTED>`
+- Passwords, tokens, credentials in URLs, private keys, and environment values are strictly redacted using `PromptBuilder.redactSensitiveData()`:
+  `DATABASE_PASSWORD="<REDACTED>"`
+  `API_KEY="<REDACTED>"`
+  `mongodb://admin:<REDACTED>@cluster0.mongodb.net/prod`
 - Raw secrets are never included in prompts, logs, telemetry, or error messages.
+- **Cloud Consent Policy**: Developers can toggle `configDebt.aiAllowCloudContext` (default: `true`). If disabled, the extension strictly blocks any repository snippets from being transmitted to cloud endpoints, keeping analysis 100% offline or local.
 
 ---
 
@@ -299,37 +314,43 @@ The UI adheres strictly to **professional developer diagnostic aesthetics**:
 
 ## 15. CLI Commands & Extension Settings
 
-### Commands (`Ctrl+Shift+P` / `Cmd+Shift+P`)
-- `Configuration Debt: Scan Workspace` — Runs full repository analysis
-- `Configuration Debt: Scan Current File` — Scans the active editor document
-- `Configuration Debt: Scan Folder` — Scans selected workspace directory
-- `Configuration Debt: Watch Workspace` — Toggles debounced incremental file watcher
-- `Configuration Debt: Open Dashboard` — Opens main diagnostic dashboard
-- `Configuration Debt: Show Findings` — Displays prioritized finding list
-- `Configuration Debt: Show Cleanup Backlog` — Displays SCM cleanup backlog
-- `Configuration Debt: Explain Finding` — Explains selected finding with grounded AI
-- `Configuration Debt: Ask Repository Assistant` — Opens repository intelligence prompt
-- `Configuration Debt: Explain Selection` — Analyzes highlighted configuration code
-- `Configuration Debt: Assess Removal Impact` — Evaluates deletion impact for a key
-- `Configuration Debt: Test AI Connection` — Verifies connection to configured AI provider
-- `Configuration Debt: Rebuild Code Index` — Forces complete re-indexing
-- `Configuration Debt: Clear History` — Clears stored scan snapshots
+### Core & AI Assistant Commands (`Ctrl+Shift+P` / `Cmd+Shift+P`)
+- `Configuration Debt: Open AI Assistant` — Opens the dedicated AI Assistant webview panel with conversation history, clickable citations, and live status.
+- `Configuration Debt: Set Gemini API Key` — Securely saves Google Gemini API key to VS Code encrypted `SecretStorage` (never in settings or disk files).
+- `Configuration Debt: Remove Gemini API Key` — Clears stored API key and resets provider status to unconfigured.
+- `Configuration Debt: Test Gemini Connection` — Sends an authentic live ping to Gemini, displaying active model and round-trip latency.
+- `Configuration Debt: Explain Selection with AI` — Gathers surrounding file context and explains selected code in the AI assistant.
+- `Configuration Debt: Ask About Current File` — Pre-seeds assistant with the active editor file, referenced configs, and caller symbols.
+- `Configuration Debt: Summarize Repository with AI` — Synthesizes architectural and configuration overview of the workspace.
+- `Configuration Debt: Scan Workspace` — Runs full repository discovery, AST indexing, and debt analysis.
+- `Configuration Debt: Scan Current File` — Scans the active editor document.
+- `Configuration Debt: Scan Folder` — Scans selected workspace directory.
+- `Configuration Debt: Watch Workspace` — Toggles debounced incremental file watcher.
+- `Configuration Debt: Open Dashboard` — Opens main diagnostic dashboard.
+- `Configuration Debt: Show Findings` — Displays prioritized finding list.
+- `Configuration Debt: Show Cleanup Backlog` — Displays SCM cleanup backlog.
+- `Configuration Debt: Explain Finding` — Explains selected finding with grounded AI.
+- `Configuration Debt: Assess Removal Impact` — Evaluates deletion impact and static dependency graph for a key.
+- `Configuration Debt: Rebuild Code Index` — Forces complete re-indexing.
+- `Configuration Debt: Clear History` — Clears stored scan snapshots.
 
 ### Settings (`settings.json`)
 ```json
 {
-  "configDebt.aiProvider": "local",
-  "configDebt.aiModel": "qwen2.5-coder:7b",
+  "configDebt.aiProvider": "gemini",
+  "configDebt.aiModel": "gemini-2.5-flash",
+  "configDebt.aiTimeout": 25000,
+  "configDebt.aiAllowCloudContext": true,
   "configDebt.aiEndpoint": "http://localhost:11434/v1",
-  "configDebt.aiTimeout": 15000,
   "configDebt.staleAgeDaysThreshold": 90,
-  "configDebt.excludePatterns": ["**/node_modules/**", "**/dist/**"],
+  "configDebt.excludePatterns": ["**/node_modules/**", "**/dist/**", "**/.git/**"],
   "configDebt.enableWatchMode": false,
   "configDebt.maxFileSize": 1048576,
   "configDebt.analysisConfidenceThreshold": 70,
   "configDebt.enableGenericFallback": true
 }
 ```
+*(Note: API keys are strictly managed via VS Code SecretStorage and are never placed in `settings.json`)*
 
 ---
 
@@ -460,3 +481,190 @@ The demonstration exercises:
 | **AST / Code Intelligence** | `AstIndexer`, `NodeExtractor`, `SymbolExtractor` | Elimination of comment false positives and scope-aware dependency mapping. |
 | **Risk Explainability** | Transparent 4-factor formula | Academic accountability: every score is mathematically decomposable into age, usage, impact, and sensitivity. |
 | **AI Grounding & Privacy** | `RetrievalEngine`, `PromptBuilder`, `OfflineAIProvider` | Strict RAG over indexed repository, zero credential leakage, and 100% offline autonomy. |
+
+---
+
+## 20. Gemini AI Assistant: Complete Guide & Operations
+
+### 20.1 Overview & Architecture
+The AI Assistant in Configuration Debt Tracker turns repository understanding into an interactive developer partner. Powered by Google Gemini (using the official `@google/genai` TypeScript SDK), it answers architectural, operational, configuration, and implementation questions grounded directly in the currently active workspace.
+
+```
+Developer Question
+        |
+        v
+Dual-Mode Retrieval (Configuration Keys + BM25 Lexical Ranking + AST Symbols)
+        |
+        v
+Evidence Extraction (Source Snippets, Exact File:Line Numbers, Callers)
+        |
+        v
+Strict Secret Redaction (Masks passwords, API keys, private tokens)
+        |
+        v
+Google Gemini API (Model: gemini-2.5-flash)
+        |
+        v
+Grounded Answer with Clickable File:Line Badges
+        |
+        v
+VS Code Assistant Webview Panel
+```
+
+---
+
+### 20.2 Quick Start Workflow
+
+#### Step 1: Open Your Repository in VS Code
+Open any project workspace containing source code and configuration files.
+
+#### Step 2: Scan the Workspace
+Run:
+`Ctrl+Shift+P` (or `Cmd+Shift+P`) $\rightarrow$ **`Configuration Debt: Scan Workspace`**
+This parses all configuration manifests, indexes source files with AST analysis, and builds the in-memory `RepositoryIndex`.
+
+#### Step 3: Securely Configure Your Gemini API Key
+Run:
+`Ctrl+Shift+P` $\rightarrow$ **`Configuration Debt: Set Gemini API Key`**
+- An encrypted password prompt opens.
+- Paste your Google Gemini API key.
+- The key is securely stored in VS Code's encrypted `SecretStorage` (`configurationDebtTracker.geminiApiKey`).
+- **Security Guarantee**: The key is *never* written to `settings.json`, repository files, webviews, URL query strings, or git commits.
+
+#### Step 4: Test the Gemini Connection
+Run:
+`Ctrl+Shift+P` $\rightarrow$ **`Configuration Debt: Test Gemini Connection`**
+This executes a real network ping using `@google/genai`. A notification reports:
+```
+Gemini connected successfully.
+Model: gemini-2.5-flash
+Latency: 1420ms
+```
+
+#### Step 5: Open the AI Assistant Panel
+Run:
+`Ctrl+Shift+P` $\rightarrow$ **`Configuration Debt: Open AI Assistant`**
+The dedicated Assistant Webview opens with conversation history, live provider status badge (`Gemini: Connected`), suggestions, and a prompt box.
+
+---
+
+### 20.3 Asking Questions About Repository Code
+
+You can ask any technical question about your repository. The assistant retrieves exact code context before prompting Gemini:
+
+| Question Type | Example Prompt | Retrieved Evidence |
+| :--- | :--- | :--- |
+| **Architecture Overview** | *"Explain the architecture of this project."* | Repository structure, README excerpts, entry points, core engines. |
+| **Application Startup** | *"How does the application start and initialize?"* | Main entrypoint file, initialization routines, configuration bootstrap. |
+| **Configuration Usage** | *"Where is DATABASE_URL used and what depends on it?"* | Declarations in `.env`/YAML, all 9 static callers, caller function names. |
+| **Calculation & Logic** | *"How is the health score calculated?"* | `healthScoreCalculator.ts`, deduction weights, test suites. |
+| **Scanner Internals** | *"Explain how the configuration scanner works."* | `configurationScanner.ts`, parser registry, file traversal logic. |
+| **Bug Investigation** | *"Find the bug causing the AI assistant to return no references."* | Retrieval prompt builder, index serialization, reference mapping. |
+| **Refactoring Impact** | *"What happens if I remove API_TIMEOUT?"* | Removal impact assessment, drift findings across 5 files, affected code. |
+| **Selection / Line-by-Line** | Highlight code $\rightarrow$ `Configuration Debt: Explain Selection with AI` | Selected snippet, enclosing function, caller relationships. |
+
+---
+
+### 20.4 Context Retrieval & Interactive Clickable Citations
+
+1. **How Retrieval Works**:
+   - Queries are evaluated against `RepositoryIndex`.
+   - Configuration queries perform canonical key resolution (e.g., `api.timeout` matches `API_TIMEOUT`).
+   - General code queries use **BM25 lexical ranking** across indexed source files, functions, classes, and comments.
+   - Only the most relevant, bounded code snippets are sent to Gemini (bounded context). Excluded paths (`node_modules`, `.git`, `dist`, binary files) are never read.
+2. **Clickable Citations**:
+   - Whenever Gemini or the offline engine cites a file (e.g. `src/db.ts:6`), it is rendered as a clickable badge: `📄 src/db.ts:6`.
+   - Clicking the badge triggers an extension host navigation command.
+   - **Path Traversal Security**: Before opening any file, the extension validates that the target path is strictly located within the workspace root. Traversal attempts (such as `../../etc/passwd`) are rejected.
+   - VS Code opens the file and reveals the exact line in center view.
+
+---
+
+### 20.5 Secret Redaction & Privacy Safeguards
+
+- **Automatic Redaction (`PromptBuilder.redactSensitiveData`)**:
+  Before any code snippet or user prompt leaves your machine, all sensitive literals are replaced with `<REDACTED>`:
+  - Plaintext passwords: `password="SuperSecret123!"` $\rightarrow$ `password="<REDACTED>"`
+  - API tokens: `AIzaSy...`, `sk_live_...`, `ghp_...` $\rightarrow$ `<REDACTED>`
+  - Connection strings: `postgres://user:secret@host/db` $\rightarrow$ `postgres://user:<REDACTED>@host/db`
+  - Private key blocks: `-----BEGIN RSA PRIVATE KEY-----` $\rightarrow$ `<REDACTED_PRIVATE_KEY>`
+- **What is transmitted to Google**:
+  Only the specific, redacted code excerpts, key names, and symbols relevant to your query. Full `.env` files or unredacted files are never transmitted.
+- **Cloud Context Transmission Toggle**:
+  To completely block sending any source code to Google's cloud API:
+  Set `"configDebt.aiAllowCloudContext": false` in VS Code Settings (`settings.json`).
+  When disabled, cloud transmission is immediately halted.
+
+---
+
+### 20.6 Offline Mode
+
+If you work in air-gapped environments or prefer zero external network calls:
+1. Open Settings (`settings.json`).
+2. Set `"configDebt.aiProvider": "offline"`.
+3. The assistant will label all responses with `(Deterministic Offline Engine)` and utilize the local AST rule engine for explanations and removal impacts.
+
+---
+
+### 20.7 Common Errors & Remediation
+
+| Error Message | Cause | Resolution |
+| :--- | :--- | :--- |
+| `Gemini API key is not configured.` | No key stored in SecretStorage. | Run `Configuration Debt: Set Gemini API Key` from Command Palette. |
+| `Invalid Gemini API key.` | Provider rejected the API key (HTTP 400/403). | Check key validity in Google AI Studio and re-enter via `Set Gemini API Key`. |
+| `Gemini API quota or rate limit exceeded.` | Exceeded Gemini free tier RPM/TPM quota (HTTP 429). | Wait 60 seconds before retrying or upgrade quota in Google Cloud Console. |
+| `The configured Gemini model was not found.` | Model identifier is deprecated or mistyped (HTTP 404). | In VS Code Settings, set `configDebt.aiModel` to a supported model (e.g. `gemini-2.5-flash`). |
+| `Gemini request timed out after 25000ms.` | Slow network or model generation delay. | Increase `configDebt.aiTimeout` in settings (e.g. `45000`) and retry. |
+| `The workspace has not been indexed yet.` | Workspace opened without running a scan. | Run `Configuration Debt: Scan Workspace` or click "Scan Workspace" in the Assistant panel. |
+| `Security validation failed: path is outside workspace.` | Model cited an external or traversal file path. | Protection mechanism activated. Citations are strictly restricted to your active workspace folder. |
+
+---
+
+### 20.8 Known Limitations of Code Retrieval
+
+1. **Dynamic Key Resolution**:
+   Keys accessed via complex runtime concatenation (e.g. `process.env[prefix + name]`) are flagged as dynamic risks by Layer A, but cannot be statically pinned to exact string names without runtime tracing.
+2. **External Manifests**:
+   Infrastructure manifests stored outside the open workspace (e.g. in separate deployment repos or Helm charts) are not indexed unless their folders are added to the multi-root workspace.
+3. **Fresh Scanning Required**:
+   When significant files are renamed or added, run `Configuration Debt: Scan Workspace` or enable `configDebt.enableWatchMode` to ensure the in-memory index reflects the newest lines.
+
+---
+
+### 20.9 Example Conversation Walkthrough
+
+```text
+[YOU]
+Explain how DATABASE_URL is used in this repository.
+
+[AI ASSISTANT (Google Gemini API • gemini-2.5-flash • 1480ms)]
+Based on the indexed repository evidence, DATABASE_URL is a critical database connection string defined across 4 configuration manifests and consumed by 9 statically identified source locations across 8 distinct programming languages:
+
+1. Declarations:
+   - 📄 .env:2 (value: <REDACTED>)
+   - 📄 application.yml:3 (key: database.url, value: <REDACTED>)
+   - 📄 docker-compose.yml:9 (value: <REDACTED>)
+   - 📄 k8s/deployment.yaml:13
+
+2. Active Source Code Consumers:
+   - 📄 src/db.ts:6: In createConnectionPool(), loaded via process.env.DATABASE_URL
+   - 📄 src/config.ts:12: Configuration export
+   - 📄 src/worker.py:4: In run_worker(), loaded via os.environ.get("DATABASE_URL")
+   - 📄 src/go/worker.go:11: In WorkerProcess()
+   - 📄 src/rust/config.rs:5: In load_database_configuration()
+   - 📄 src/csharp/Settings.cs:10: In Settings class
+   - 📄 src/ServiceApp.java:10: In ServiceApp class
+   - 📄 src/shell/deploy.sh:7: Container deployment script
+
+3. Architectural Observation:
+   Values drift between local (.env) and Docker Compose. Because 8 language modules consume this setting, modifying or deleting DATABASE_URL requires coordinated refactoring across all 6 consumer services.
+
+[YOU]
+Which function calls createConnectionPool?
+
+[AI ASSISTANT (Google Gemini API • gemini-2.5-flash • 1210ms)]
+Tracing references to createConnectionPool in src/db.ts:6:
+- It is imported and invoked during service startup in 📄 src/config.ts:18.
+- The connection pool instance is subsequently passed to the database health check routine in 📄 src/health/database.ts:8.
+```
+
