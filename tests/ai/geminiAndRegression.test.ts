@@ -45,6 +45,7 @@ export async function runGeminiAndRegressionTests(): Promise<void> {
   // Helper mock client builder
   function createMockGenAI(options: {
     responseText?: string;
+    responseObject?: any;
     throwError?: Error;
     delayMs?: number;
     usage?: { promptTokenCount: number; candidatesTokenCount: number };
@@ -61,6 +62,9 @@ export async function runGeminiAndRegressionTests(): Promise<void> {
           }
           if (options.throwError) {
             throw options.throwError;
+          }
+          if (options.responseObject) {
+            return options.responseObject;
           }
           return {
             text: options.responseText ?? 'Mock response from Gemini',
@@ -132,6 +136,27 @@ export async function runGeminiAndRegressionTests(): Promise<void> {
     assert.strictEqual(response.tokenUsage?.promptTokens, 42);
     assert.strictEqual(response.tokenUsage?.completionTokens, 128);
     assert.ok(typeof response.latencyMs === 'number' && response.latencyMs >= 0);
+
+    // Also verify candidate parts fallback when response.text is empty but non-thought parts exist
+    const mockClientWithParts = createMockGenAI({
+      responseObject: {
+        text: '',
+        candidates: [
+          {
+            content: {
+              parts: [
+                { thought: true, text: 'Thinking about the answer...' },
+                { text: 'Extracted from candidate parts' }
+              ]
+            }
+          }
+        ]
+      }
+    });
+    const providerWithParts = new GeminiAIProvider('dummy-key-12345', 'gemini-2.5-flash', mockClientWithParts);
+    const fallbackResponse = await providerWithParts.chat([{ role: 'user', content: 'Extract fallback' }]);
+    assert.strictEqual(fallbackResponse.content, 'Extracted from candidate parts');
+
     console.log('✓ 3. Response text is extracted correctly');
   }
 
@@ -149,6 +174,30 @@ export async function runGeminiAndRegressionTests(): Promise<void> {
       /Gemini returned an empty response/i,
       'Should reject empty response with clear diagnostic'
     );
+
+    // Also verify that MAX_TOKENS truncation during reasoning is diagnosed clearly
+    const mockMaxTokensClient = createMockGenAI({
+      responseObject: {
+        text: '',
+        candidates: [
+          {
+            finishReason: 'MAX_TOKENS',
+            content: {
+              parts: [{ thought: true, text: 'Thinking that used up all output tokens...' }]
+            }
+          }
+        ]
+      }
+    });
+    const providerMaxTokens = new GeminiAIProvider('dummy-key-12345', 'gemini-2.5-flash', mockMaxTokensClient);
+    await assert.rejects(
+      async () => {
+        await providerMaxTokens.chat([{ role: 'user', content: 'Token starve test' }]);
+      },
+      /MAX_TOKENS/i,
+      'Should diagnose MAX_TOKENS finish reason clearly'
+    );
+
     console.log('✓ 4. Empty response is handled');
   }
 
@@ -594,6 +643,28 @@ export async function runGeminiAndRegressionTests(): Promise<void> {
     assert.strictEqual(factory.getStatus('gemini', 'valid-api-key-string'), 'Gemini: Connected');
     assert.strictEqual(factory.getStatus('offline'), 'Offline mode');
     assert.strictEqual(factory.getStatus('local'), 'Local model: Unavailable');
+
+    // Also verify connection test with Gemini provider uses 512 maxOutputTokens
+    let pingParams: any = null;
+    const mockPingClient = createMockGenAI({
+      responseText: 'OK',
+      captureCall: (args) => { pingParams = args; }
+    });
+    const explainer = new AiExplainer();
+    explainer.getProviderFactory().getGeminiProvider().updateConfig('test-key-12345', 'gemini-2.5-flash');
+    explainer.getProviderFactory().getGeminiProvider().setInjectedClient(mockPingClient);
+
+    const testRes = await explainer.testConnection({
+      providerType: 'gemini',
+      model: 'gemini-2.5-flash',
+      geminiApiKey: 'test-key-12345'
+    });
+
+    assert.strictEqual(testRes.ok, true, 'Connection test must succeed');
+    assert.strictEqual(testRes.modelUsed, 'gemini-2.5-flash');
+    assert.ok(testRes.message.includes('Gemini connected successfully'));
+    assert.strictEqual(pingParams.config.maxOutputTokens, 512, 'Must request 512 maxOutputTokens for ping');
+
     console.log('✓ 19. Provider status updates correctly');
   }
 

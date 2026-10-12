@@ -14,21 +14,35 @@ export class GeminiAIProvider implements IAIProvider {
   private client: GoogleGenAI | null = null;
   private apiKey: string = '';
   private model: string = 'gemini-2.5-flash';
+  private hasInjected: boolean = false;
 
   constructor(apiKey: string = '', model: string = 'gemini-2.5-flash', injectedClient?: GoogleGenAI) {
     if (injectedClient) {
       this.client = injectedClient;
       this.apiKey = apiKey || 'injected';
       this.model = model || 'gemini-2.5-flash';
+      this.hasInjected = true;
     } else {
       this.updateConfig(apiKey, model);
     }
+  }
+
+  setInjectedClient(client: GoogleGenAI | null): void {
+    this.client = client;
+    this.hasInjected = Boolean(client);
+  }
+
+  hasInjectedClient(): boolean {
+    return this.hasInjected;
   }
 
   updateConfig(apiKey: string, model?: string): void {
     this.apiKey = apiKey ? apiKey.trim() : '';
     if (model && model.trim()) {
       this.model = model.trim();
+    }
+    if (this.hasInjected && this.client) {
+      return;
     }
     if (this.apiKey) {
       this.client = new GoogleGenAI({ apiKey: this.apiKey });
@@ -95,7 +109,35 @@ export class GeminiAIProvider implements IAIProvider {
         clearTimeout(timer);
       });
 
-      const text = response.text?.trim() || '';
+      let text = (response.text || '').trim();
+
+      // Fallback: If response.text is empty, inspect candidate parts and finish reasons
+      if (!text && response.candidates && response.candidates.length > 0) {
+        const candidate = response.candidates[0];
+        const parts = candidate.content?.parts || [];
+
+        // Concatenate non-thought text parts if present
+        const textParts = parts
+          .filter((p: any) => !p.thought && typeof p.text === 'string')
+          .map((p: any) => p.text)
+          .join('')
+          .trim();
+
+        if (textParts) {
+          text = textParts;
+        } else if (candidate.finishReason === 'MAX_TOKENS') {
+          throw new Error('Gemini output token limit reached before completion (finishReason: MAX_TOKENS). Increase maxTokens in settings.');
+        } else if (candidate.finishReason === 'SAFETY') {
+          throw new Error('Gemini response was blocked by safety filters (finishReason: SAFETY).');
+        } else if (candidate.finishReason === 'RECITATION') {
+          throw new Error('Gemini response was blocked by recitation check (finishReason: RECITATION).');
+        }
+      }
+
+      if (response.promptFeedback?.blockReason) {
+        throw new Error(`Gemini blocked the request: ${response.promptFeedback.blockReason}`);
+      }
+
       if (!text) {
         throw new Error('Gemini returned an empty response.');
       }

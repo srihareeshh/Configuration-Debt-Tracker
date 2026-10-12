@@ -106,9 +106,10 @@ export class AiExplainer {
 
     try {
       // Send real lightweight ping to verify authentication and model responsiveness
+      // maxTokens is set to 512 to ensure thinking models (Gemini 2.5 Flash) have sufficient token budget for reasoning and response
       const resp = await provider.chat(
         [{ role: 'user', content: 'Ping. Respond with OK.' }],
-        { maxTokens: 10, timeoutMs: settings.timeoutMs || 10000 }
+        { maxTokens: 512, timeoutMs: settings.timeoutMs || 15000 }
       );
 
       const latencyMs = resp.latencyMs || Date.now() - startTime;
