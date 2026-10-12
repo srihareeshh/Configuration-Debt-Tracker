@@ -428,9 +428,9 @@ export function getAssistantHtml(
       </span>
     </div>
     <div class="top-actions">
-      <button class="icon-action-btn" onclick="testConnection()">Test Connection</button>
-      <button class="icon-action-btn" onclick="configureKey()">Set API Key</button>
-      <button class="icon-action-btn" onclick="clearChat()">Clear Chat</button>
+      <button id="testConnBtn" class="icon-action-btn" onclick="testConnection()">Test Connection</button>
+      <button id="setApiKeyBtn" class="icon-action-btn" onclick="configureKey()">Set API Key</button>
+      <button id="clearChatBtn" class="icon-action-btn" onclick="clearChat()">Clear Chat</button>
     </div>
   </div>
 
@@ -439,7 +439,7 @@ export function getAssistantHtml(
       ? `
     <div class="unscanned-banner">
       <span>Workspace is not indexed. Run a scan to answer repository-grounded questions.</span>
-      <button class="icon-action-btn" onclick="scanWorkspace()">Scan Workspace</button>
+      <button id="scanWorkspaceBtn" class="icon-action-btn" onclick="scanWorkspace()">Scan Workspace</button>
     </div>
   `
       : ''
@@ -451,12 +451,12 @@ export function getAssistantHtml(
       <h2>Configuration Debt Assistant</h2>
       <p>Ask repository-grounded questions about configurations, architecture, static references, and risk.</p>
       <div class="chips-grid">
-        <button class="chip-btn" onclick="sendPrompt('Explain the architecture of this project.')">Explain the architecture of this project</button>
-        <button class="chip-btn" onclick="sendPrompt('Where is DATABASE_URL used and what depends on it?')">Where is DATABASE_URL used?</button>
-        <button class="chip-btn" onclick="sendPrompt('How is the health score calculated?')">How is the health score calculated?</button>
-        <button class="chip-btn" onclick="sendPrompt('Explain how the configuration scanner works.')">Explain the configuration scanner</button>
-        <button class="chip-btn" onclick="sendPrompt('Explain configuration drift in this project.')">Explain configuration drift</button>
-        <button class="chip-btn" onclick="sendPrompt('Which configuration has the highest risk score?')">Highest risk configuration</button>
+        <button class="chip-btn" data-prompt="Explain the architecture of this project." onclick="sendPrompt('Explain the architecture of this project.')">Explain the architecture of this project</button>
+        <button class="chip-btn" data-prompt="Where is DATABASE_URL used and what depends on it?" onclick="sendPrompt('Where is DATABASE_URL used and what depends on it?')">Where is DATABASE_URL used?</button>
+        <button class="chip-btn" data-prompt="How is the health score calculated?" onclick="sendPrompt('How is the health score calculated?')">How is the health score calculated?</button>
+        <button class="chip-btn" data-prompt="Explain how the configuration scanner works." onclick="sendPrompt('Explain how the configuration scanner works.')">Explain the configuration scanner</button>
+        <button class="chip-btn" data-prompt="Explain configuration drift in this project." onclick="sendPrompt('Explain configuration drift in this project.')">Explain configuration drift</button>
+        <button class="chip-btn" data-prompt="Which configuration has the highest risk score?" onclick="sendPrompt('Which configuration has the highest risk score?')">Highest risk configuration</button>
       </div>
     </div>
 
@@ -608,38 +608,40 @@ export function getAssistantHtml(
       if (!text) return '';
 
       // 1. Escape HTML
-      let escaped = text
+      var escaped = text
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
 
-      // 2. Format fenced code blocks
-      const tripleTickRegex = new RegExp('\\x60\\x60\\x60([a-zA-Z0-9_-]*)\\n([\\s\\S]*?)\\x60\\x60\\x60', 'g');
+      // 2. Format fenced code blocks using String.fromCharCode to avoid template literal escaping issues
+      var bt = String.fromCharCode(96);
+      var tripleTickRegex = new RegExp(bt + bt + bt + '([a-zA-Z0-9_-]*)[\\\\r\\\\n]+([\\\\s\\\\S]*?)' + bt + bt + bt, 'g');
       escaped = escaped.replace(tripleTickRegex, function(m, lang, code) {
         return '<pre><code class="language-' + lang + '">' + code.trim() + '</code></pre>';
       });
 
       // 3. Format inline code
-      const singleTickRegex = new RegExp('\\x60([^\\x60]+)\\x60', 'g');
+      var singleTickRegex = new RegExp(bt + '([^' + bt + ']+)' + bt, 'g');
       escaped = escaped.replace(singleTickRegex, '<code>$1</code>');
 
       // 4. Transform citations into clickable links: file:line (e.g. src/db.ts:12)
-      const citationRegex = /([a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)+\.[a-zA-Z0-9]+):(\d+)/g;
+      var citationRegex = new RegExp('([a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)+\\\\.[a-zA-Z0-9]+):(\\\\d+)', 'g');
       escaped = escaped.replace(citationRegex, function(m, file, line) {
         return '<span class="citation-link" data-file="' + file + '" data-line="' + line + '">📄 ' + file + ':' + line + '</span>';
       });
 
       // 5. Bold **text**
-      escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      var boldRegex = new RegExp('\\\\*\\\\*([^*]+)\\\\*\\\\*', 'g');
+      escaped = escaped.replace(boldRegex, '<strong>$1</strong>');
 
       // 6. Convert newlines to paragraphs/lists
-      const lines = escaped.split('\\n');
-      let html = '';
-      let inList = false;
+      var lines = escaped.split(/\\r?\\n/);
+      var html = '';
+      var inList = false;
 
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const trimmed = line.trim();
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        var trimmed = line.trim();
         if (trimmed.startsWith('- ') || trimmed.startsWith('• ') || trimmed.startsWith('* ')) {
           if (!inList) {
             html += '<ul>';
@@ -667,10 +669,20 @@ export function getAssistantHtml(
 
     function scrollToBottom() {
       const chat = document.getElementById('chatContainer');
-      chat.scrollTop = chat.scrollHeight;
+      if (chat) {
+        chat.scrollTop = chat.scrollHeight;
+      }
     }
 
     document.addEventListener('click', function(e) {
+      const chip = e.target && e.target.closest ? e.target.closest('.chip-btn') : null;
+      if (chip) {
+        const prompt = chip.getAttribute('data-prompt') || chip.textContent;
+        if (prompt) {
+          sendPrompt(prompt.trim());
+        }
+        return;
+      }
       const target = e.target && e.target.closest ? e.target.closest('.citation-link') : null;
       if (target) {
         const file = target.getAttribute('data-file');
@@ -698,20 +710,42 @@ export function getAssistantHtml(
           const badge = document.getElementById('providerBadge');
           const badgeText = document.getElementById('providerStatusText');
           const modelInfo = document.getElementById('modelInfo');
-          badgeText.textContent = msg.status;
-          modelInfo.textContent = 'Provider: ' + msg.status;
-          badge.className = 'status-badge ' + getBadgeClass(msg.status);
+          if (badgeText) badgeText.textContent = msg.status;
+          if (modelInfo) modelInfo.textContent = 'Provider: ' + msg.status;
+          if (badge) badge.className = 'status-badge ' + getBadgeClass(msg.status);
           break;
       }
     });
 
     function getBadgeClass(status) {
+      if (!status) return '';
       if (status.includes('Connected')) return 'connected';
       if (status.includes('Offline')) return 'offline';
       if (status.includes('Not configured')) return 'warning';
       if (status.includes('failed') || status.includes('Unavailable')) return 'error';
       return '';
     }
+
+    // Attach explicit DOM event listeners to guarantee execution
+    const sendBtn = document.getElementById('sendBtn');
+    if (sendBtn) {
+      sendBtn.addEventListener('click', submitMessage);
+    }
+
+    const promptInput = document.getElementById('promptInput');
+    if (promptInput) {
+      promptInput.addEventListener('keydown', handleKeyDown);
+      promptInput.addEventListener('input', function() { autoResize(this); });
+    }
+
+    const testConnBtn = document.getElementById('testConnBtn');
+    if (testConnBtn) testConnBtn.addEventListener('click', testConnection);
+
+    const setApiKeyBtn = document.getElementById('setApiKeyBtn');
+    if (setApiKeyBtn) setApiKeyBtn.addEventListener('click', configureKey);
+
+    const clearChatBtn = document.getElementById('clearChatBtn');
+    if (clearChatBtn) clearChatBtn.addEventListener('click', clearChat);
 
     renderInitialMessages();
   </script>
