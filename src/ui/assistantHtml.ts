@@ -15,12 +15,11 @@ export interface AssistantRenderMessage {
 
 export function getAssistantHtml(
   messages: AssistantRenderMessage[],
-  providerStatus: string,
+  _providerStatus: string = '',
   isGenerating: boolean = false,
   hasScan: boolean = true
 ): string {
   const initialMessagesJson = JSON.stringify(messages).replace(/</g, '\\u003c');
-  const badgeClass = getBadgeClass(providerStatus);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -66,7 +65,7 @@ export function getAssistantHtml(
 
     .top-bar {
       display: flex;
-      justify-content: space-between;
+      justify-content: flex-end;
       align-items: center;
       padding: 10px 16px;
       border-bottom: 1px solid var(--border);
@@ -421,12 +420,6 @@ export function getAssistantHtml(
 
   <!-- Top Bar -->
   <div class="top-bar">
-    <div class="status-group">
-      <span id="providerBadge" class="status-badge ${badgeClass}">
-        <span class="status-dot"></span>
-        <span id="providerStatusText">${providerStatus}</span>
-      </span>
-    </div>
     <div class="top-actions">
       <button id="testConnBtn" class="icon-action-btn" onclick="testConnection()">Test Connection</button>
       <button id="setApiKeyBtn" class="icon-action-btn" onclick="configureKey()">Set API Key</button>
@@ -486,7 +479,6 @@ export function getAssistantHtml(
     </div>
     <div class="input-hint">
       <span>Press Enter to send, Shift+Enter for new line</span>
-      <span id="modelInfo">Provider: ${providerStatus}</span>
     </div>
   </div>
 
@@ -751,12 +743,4 @@ export function getAssistantHtml(
   </script>
 </body>
 </html>`;
-}
-
-function getBadgeClass(status: string): string {
-  if (status.includes('Connected')) return 'connected';
-  if (status.includes('Offline')) return 'offline';
-  if (status.includes('Not configured')) return 'warning';
-  if (status.includes('failed') || status.includes('Unavailable')) return 'error';
-  return '';
 }
